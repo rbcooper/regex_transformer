@@ -43,8 +43,13 @@ class DfaGenerator():
             batches[i, :] = t.tensor(list(int(w) for w in word))
             states[i, :] = t.tensor(list(int(s) for s in word_states))
         return batches, states
+
+    def batches_and_states_gen(self, word_len: int, batch_size: int, seed: int = None):
+        while True:
+            yield self.get_batches_and_states(word_len, batch_size, seed=seed)
     
     @staticmethod
     def from_regex(regex: str):
         dfa = dfa_from_regex(regex)
         return DfaGenerator(dfa)
+# %%
