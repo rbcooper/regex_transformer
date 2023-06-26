@@ -1,6 +1,6 @@
 # %%
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, Generator, List, Tuple
 
 import torch as t
 from automata.fa.dfa import DFA
@@ -14,17 +14,17 @@ from IPython.display import display, Image
 # %%
 
 
-def dfa_from_regex(regex: str):
-    """∏
+def dfa_from_regex(regex: str) -> DFA:
+    """
     Create a DFA from a regular expression
     """
     nfa = NFA.from_regex(regex)
     dfa = DFA.from_nfa(nfa)
-    dfa = make_start_state_zero(dfa)
+    # dfa = make_start_state_zero(dfa)
     return dfa
 
 
-def display_fa(automaton: FA):
+def display_fa(automaton: FA) -> None:
     """
     Displays a finite automaton in a Jupyter Notebook
     """
@@ -33,13 +33,13 @@ def display_fa(automaton: FA):
     display(plt)
 
 
-def make_start_state_zero(dfa: DFA):
+def make_start_state_zero(dfa: DFA) -> DFA:
     """ """
     if dfa.initial_state == 0:
         return dfa
     old_start_state = dfa.initial_state
 
-    def rename_state(state):
+    def rename_state(state: int) -> int:
         if state == old_start_state:
             return 0
         elif state == 0:
@@ -47,7 +47,7 @@ def make_start_state_zero(dfa: DFA):
         else:
             return state
 
-    def rename_transitions(state_transition: Dict[str, int]):
+    def rename_transitions(state_transition: Dict[str, int]) -> Dict[str, int]:
         """
         renames the states in the transition from a single state.  This isn't
         the complete transition function, only the transition function from a
@@ -85,24 +85,36 @@ class DfaGenerator:
     def get_batches_and_states(
         self, word_len: int, batch_size: int, seed: int = None
     ) -> Tuple[t.Tensor, t.Tensor]:
-        """Returns a tuple of (batches, states).  The batches are a tensor of shape (batch_size, word_len)"""
-        batches = t.zeros((batch_size, word_len), dtype=t.int32)
-        states = t.zeros((batch_size, word_len + 1), dtype=t.int32)
+        """
+        Returns a tuple of (batches, states).  The batches are a tensor of shape (batch_size, word_len)
+        word_len should be the model's n_ctx
+        """
+        batches = t.zeros((batch_size, word_len), dtype=t.int64)
+        states = t.zeros((batch_size, word_len + 1), dtype=t.int64)
         for i in range(batch_size):
             word = self.dfa.random_word(word_len, seed=seed)
             word_states = self.dfa.read_input_stepwise(word)
-            batches[i, :] = t.tensor(list(int(w) for w in word))
+            # TODO switch to constructing dataset / dataloader
+            batches[i, :] = t.tensor(list(ord(w) for w in word))
             states[i, :] = t.tensor(list(int(s) for s in word_states))
         return batches, states
 
-    def batches_and_states_gen(self, word_len: int, batch_size: int, seed: int = None):
+    def batches_and_states_gen(
+        self, word_len: int, batch_size: int, seed: int = None
+    ) -> Generator[Tuple[t.Tensor, t.Tensor], None, None]:
         while True:
             yield self.get_batches_and_states(word_len, batch_size, seed=seed)
 
     @staticmethod
-    def from_regex(regex: str):
+    def from_regex(regex: str) -> DFA:
         dfa = dfa_from_regex(regex)
         return DfaGenerator(dfa)
 
+    def display_fa(self):
+        """Displays a finite automaton in a Jupyter Notebook"""
+        display_fa(self.dfa)
+
 
 # %%
+
+
