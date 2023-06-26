@@ -2,7 +2,7 @@
 from torch.utils.data import Dataset
 
 from dataclasses import dataclass
-from typing import Dict, Generator, List, Tuple
+from typing import Dict, Generator, Tuple
 
 import torch as t
 from automata.fa.dfa import DFA
@@ -10,7 +10,6 @@ from automata.fa.fa import FA
 from automata.fa.nfa import NFA
 
 from frozendict import frozendict
-from graphviz import Digraph
 from IPython.display import display, Image
 
 # %%
@@ -89,7 +88,7 @@ class DfaGenerator:
     ) -> Tuple[t.Tensor, t.Tensor]:
         """
         Returns a tuple of (batches, states).  The batches are a tensor of shape (batch_size, word_len)
-        word_len should be the model's n_ctx
+        word_len should be the model's n_ctx∏
         """
         batches = t.zeros((batch_size, word_len), dtype=t.int64)
         states = t.zeros((batch_size, word_len + 1), dtype=t.int64)
@@ -115,7 +114,7 @@ class DfaGenerator:
     def display_fa(self):
         """Displays a finite automaton in a Jupyter Notebook"""
         display_fa(self.dfa)
-    
+
     def dataset(self, length=20) -> Dataset:
         return DfaDataset(self, length)
 
@@ -138,8 +137,9 @@ class DfaDataset(Dataset):
         states = t.tensor(list(int(s) for s in word_states))
         return batches, states
 
+
 # %%
-C_IF_EVEN_AS_DFA_GEN = DfaGenerator.from_regex('((B|C)*AB*A)*(B|C)*')
+C_IF_EVEN_AS_DFA_GEN = DfaGenerator.from_regex("((B|C)*AB*A)*(B|C)*")
 
 
 # %%
