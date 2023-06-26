@@ -7,7 +7,7 @@ readme = "README.md"
 packages = [{include = "regex_transformer"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.8"
 torch = "^2.0.1"
 automata-lib = "^7.1.0"
 frozendict = "^2.3.8"
@@ -17,5 +17,6 @@ plotly = "^5.15.0"
 
 
 [build-system]
+
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
