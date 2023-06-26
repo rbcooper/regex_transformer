@@ -1,4 +1,6 @@
 # %%
+from torch.utils.data import Dataset
+
 from dataclasses import dataclass
 from typing import Dict, Generator, List, Tuple
 
@@ -113,8 +115,31 @@ class DfaGenerator:
     def display_fa(self):
         """Displays a finite automaton in a Jupyter Notebook"""
         display_fa(self.dfa)
+    
+    def dataset(self, length=20) -> Dataset:
+        return DfaDataset(self, length)
+
+
+class DfaDataset(Dataset):
+    def __init__(self, dfa_gen: DfaGenerator, static_length: int):
+        self.dfa_gen = dfa_gen
+        self.dfa = dfa_gen.dfa
+        self.word_len = static_length
+
+    def __len__(self):
+        return (2**31) - 1
+
+    def __getitem__(self, idx):
+        seed = idx
+        word = self.dfa.random_word(k=self.word_len, seed=seed)
+        word_states = self.dfa.read_input_stepwise(word)
+        # TODO switch to constructing dataset / dataloader
+        batches = t.tensor(list(ord(w) for w in word))
+        states = t.tensor(list(int(s) for s in word_states))
+        return batches, states
+
+# %%
+C_IF_EVEN_AS_DFA_GEN = DfaGenerator.from_regex('((B|C)*AB*A)*(B|C)*')
 
 
 # %%
-
-
