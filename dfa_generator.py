@@ -111,6 +111,15 @@ class DfaGenerator:
         dfa = dfa_from_regex(regex)
         return DfaGenerator(dfa)
 
+    def tokenize(self, word: str) -> t.Tensor:
+        return t.tensor(list(ord(w) for w in word))
+
+    def detokenize(self, tensor: t.Tensor) -> str:
+        if len(tensor.shape) == 1:
+            return "".join(chr(c) for c in tensor)
+        elif len(tensor.shape) == 2:
+            return [self.detokenize(w) for w in tensor]
+
     def display_fa(self):
         """Displays a finite automaton in a Jupyter Notebook"""
         display_fa(self.dfa)
