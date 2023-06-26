@@ -13,7 +13,6 @@ import numpy as np
 import random
 import plotly.express as px
 import tqdm
-import liu_automata
 import dfa_generator
 from dfa_generator import DfaGenerator
 # sklearn logistic regression
