@@ -2,7 +2,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+poetry.lock
+.venv/
+
 .ipynb_checkpoints
+.hypothesis/
 
 wandb
 MNIST
