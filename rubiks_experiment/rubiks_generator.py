@@ -30,174 +30,26 @@ _square_to_english_color_name = {
     "🟧": "bright_red",
 }
 
-identity_move2x2x2 = list(range(24))
-
-basic_moves2x2x2 = {
-    "U": [
-        0,
-        1,
-        12,
-        13,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        14,
-        15,
-        18,
-        19,
-        16,
-        17,
-        20,
-        21,
-        22,
-        23,
-    ],
-    "D": [
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        10,
-        11,
-        8,
-        9,
-        12,
-        13,
-        14,
-        15,
-        16,
-        17,
-        18,
-        19,
-        22,
-        23,
-        20,
-        21,
-    ],
-    "L": [
-        20,
-        21,
-        2,
-        3,
-        0,
-        1,
-        6,
-        7,
-        4,
-        5,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-        8,
-        17,
-        18,
-        19,
-        16,
-        9,
-        22,
-        23,
-    ],
-    "R": [
-        0,
-        1,
-        6,
-        7,
-        4,
-        5,
-        22,
-        23,
-        8,
-        9,
-        20,
-        21,
-        2,
-        3,
-        14,
-        15,
-        16,
-        17,
-        18,
-        19,
-        20,
-        21,
-        12,
-        13,
-    ],
-    "F": [
-        16,
-        17,
-        18,
-        19,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-        20,
-        21,
-        22,
-        23,
-        0,
-        1,
-        2,
-        3,
-    ],
-    "B": [
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        22,
-        23,
-        20,
-        21,
-        16,
-        17,
-        18,
-        19,
-        12,
-        13,
-        14,
-        15,
-        8,
-        9,
-        10,
-        11,
-    ],
-}
-
-
 def _debug_moves():
     for label, move in basic_moves2x2x2.items():
         to_the_forth = permute_product([move] * 4)
         if to_the_forth != identity_move2x2x2:
             print(f"Move {label} is not of order 4: {to_the_forth}")
             _debug_basic_move(move)
+
+identity_move2x2x2 = list(range(24))
+__basic_moves_strs = {
+    "U": " 0  1 12 13  2  3  4  5  6  7  8  9 10 11 14 15 18 19 16 17 20 21 22 23",
+    "D": " 0  1  2  3  4  5  6  7 10 11  8  9 12 13 14 15 16 17 18 19 22 23 20 21",
+    "L": "20 21  2  3  0  1  6  7  4  5 10 11 12 13 14 15  8 17 18 19 16  9 22 23",
+    "R": " 0  1  6  7  4  5 22 23  8  9 20 21  2  3 14 15 16 17 18 19 20 21 12 13",
+    "F": "16 17 18 19  4  5  6  7  8  9 10 11 12 13 14 15 20 21 22 23  0  1  2  3",
+    "B": " 0  1  2  3  4  5  6  7 22 23 20 21 16 17 18 19 12 13 14 15  8  9 10 11",
+}
+basic_moves2x2x2 = {k: [int(s) for s in v.split()] for k, v in __basic_moves_strs.items()}
+
+_debug_moves()
+
 
 
 def _debug_basic_move(move):
@@ -234,9 +86,8 @@ for label, move in basic_moves2x2x2.items():
         print(f"Move {label} is not of order 4: {to_the_forth}")
 
 
-def generate_sticker_to_color():
+def _generate_sticker_to_color(stickers_per_face=4):
     face_colors = ["U", "R", "F", "D", "L", "B"]
-    stickers_per_face = 4
     sticker_to_color = {}
 
     for i in range(len(face_colors)):
@@ -246,7 +97,7 @@ def generate_sticker_to_color():
     return sticker_to_color
 
 
-sticker_to_color = generate_sticker_to_color()
+sticker_to_color = _generate_sticker_to_color()
 
 
 def sticker_to_emoji(s : Union[int, str], as_number:bool = False) -> str:
