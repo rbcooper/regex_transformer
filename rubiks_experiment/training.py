@@ -7,6 +7,7 @@ import random
 from importlib import reload
 from typing import List, Optional
 from datetime import datetime
+from frozendict import frozendict
 
 import circuitsvis
 import numpy as np
@@ -19,8 +20,8 @@ import transformer_lens
 
 import wandb
 from automata.fa.dfa import DFA
-import data_generation
-from data_generation import CubePuzzle111
+import rubiks_generator
+from rubiks_generator import CubePuzzle111, CubieRepresentation
 from einops import rearrange, reduce, repeat
 from IPython.display import display
 
@@ -28,11 +29,13 @@ from sklearn.linear_model import LogisticRegression
 import transformer_lens
 from transformer_lens import HookedTransformer
 
+
+
 # %%
 
 
 def refresh():
-    reload(data_generation)
+    reload(rubiks_generator)
 
 refresh()
 
@@ -46,8 +49,8 @@ transformer_lens.HookedTransformerConfig
 # reference_model = HookedTransformer.from_pretrained("gelu-4l", fold_ln=False, center_unembed=False, center_writing_weights=False)
 # %%
 
-cfg = transformer_lens.HookedTransformerConfig(
-    **{
+base_transformer_config = frozendict(
+    {
         "act_fn": "gelu",
         "attention_dir": "causal",
         "attn_only": False,
@@ -69,7 +72,7 @@ cfg = transformer_lens.HookedTransformerConfig(
         "init_weights": True,
         # 'initializer_range': 0.035355339059327376,
         "model_name": "regex-tester",
-        "n_ctx": 32,
+        "n_ctx": 31,
         "n_devices": 1,
         "n_heads": 4,
         "n_layers": 4,
@@ -91,8 +94,21 @@ cfg = transformer_lens.HookedTransformerConfig(
     }
 )
 
-# %%
-cfg.n_params
+# model_sweep_config = {
+#     "n_layers": {"values": [2, 3, 4, 6, 8]},
+#     "d_model": {"values": [64, 128, 192, 256]},
+#     "n_heads": {"values": [2, 3, 4, 6]},
+#     "d_mlp": {"values": [256, 512, 768]},
+# }
+
+
+
+
+cfg = transformer_lens.HookedTransformerConfig(**base_transformer_config)
+
+
+
+
 # %%
 
 model = HookedTransformer(cfg)
@@ -150,6 +166,7 @@ def train_basic_model(
 ):
     project_name = f"rubiks-ABC-wandb-develop"
     with wandb.init(project=project_name, job_type="train") as run:
+        
         print(f"Batch size: {batch_size}")
         lr = 1e-4
         betas = (0.9, 0.95)
@@ -161,7 +178,7 @@ def train_basic_model(
         scheduler = t.optim.lr_scheduler.LambdaLR(
             optimizer, lambda i: min(i / 100, 1.0)
         )
-        data_loader = CubePuzzle111.dataloader(
+        data_loader = CubieRepresentation.dataloader(
             data_length=cfg.n_ctx, batch_size=batch_size, seed=seed
         )
 
@@ -172,12 +189,12 @@ def train_basic_model(
         print(f"Model has {n_parameters} parameters = {parameter_size} MB")
 
         """## Model Training"""
-
+        model.train()
         losses = []
         for epoch, (tokens, states) in tqdm.auto.tqdm(
             enumerate(data_loader), total=num_epochs
         ):
-            # print(tokens.device, states.device)
+            # print(tokens)
             tokens = tokens.cuda()
             logits = model(tokens)
             loss = loss_fn(logits, tokens)
@@ -208,7 +225,7 @@ model_file_name = f"model_weights_parity_{cfg.n_layers}l_{cfg.d_model}_{timestam
 
 if train:
     losses = train_basic_model(
-        model, batch_size=32, num_epochs=20_000, seed=123
+        model, batch_size=32, num_epochs=30000, seed=123
     )
     fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
     fig.show()
@@ -218,10 +235,14 @@ else:
     model.load_state_dict(t.load(model_file_name))
 # %%
 
-dl = CubePuzzle111.dataloader(cfg.n_ctx, batch_size=2)
+# with t.inference_mode():
+#     model.eval()
+#     dl = CubieRepresentation.dataloader(cfg.n_ctx, batch_size=31)
 
-for tokens, states in dl:
-    print(tokens.shape)
-    logits = model(tokens.cuda())
-    break
+#     for tokens, states in dl:
+#         print(tokens.shape)
+#         logits = model(tokens.cuda())
+#         logitslist(logits.argmax(-1))
+#         print(rubiks_generator.tokenizer.decode_batch()
+#         break
 # %%
