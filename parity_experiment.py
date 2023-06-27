@@ -11,15 +11,17 @@ import circuitsvis
 import dfa_generator
 import numpy as np
 import plotly.express as px
-from IPython.display import display
 
 import torch as t
 import tqdm
 
 import transformer_lens
+
+import wandb
 from automata.fa.dfa import DFA
 from dfa_generator import DfaGenerator
 from einops import rearrange, reduce, repeat
+from IPython.display import display
 
 from sklearn.linear_model import LogisticRegression
 from transformer_lens import HookedTransformer
@@ -68,7 +70,7 @@ cfg = transformer_lens.HookedTransformerConfig(
         "n_ctx": 32,
         "n_devices": 1,
         "n_heads": 4,
-        "n_layers": 8,
+        "n_layers": 4,
         # 'n_params': 12582912,
         "normalization_type": "LN",
         "original_architecture": "neel",
@@ -117,83 +119,19 @@ def loss_fn(logits, tokens, return_per_token=False):
     return loss
 
 
+import wandb
+
+wandb.Artifact("dfa", type="dfa", metadata={"dfa": gen.dfa})
+
 # %%
 # aa_train = make_aa_generator(seed=123)
 # aa_test = make_aa_generator(seed=456)
 
-
-def train_basic_model(
-    model, gen: dfa_generator.DfaGenerator, batch_size=64, num_epochs=10_000, seed=123
-):
-    print(f"Batch size: {batch_size}")
-    lr = 1e-4
-    betas = (0.9, 0.95)
-    max_grad_norm = 1.0
-    wd = 0.01
-    optimizer = t.optim.AdamW(model.parameters(), lr=lr, betas=betas, weight_decay=wd)
-    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, lambda i: min(i / 100, 1.0))
-    data_loader = t.utils.data.DataLoader(
-        gen.dataset(length=model.cfg.n_ctx), batch_size=batch_size
-    )
-    print(data_loader)
-
-    n_parameters = sum(p.numel() for p in model.parameters())
-    parameter_size = n_parameters * model.parameters().__next__().element_size() / 1e6
-    print(f"Model has {n_parameters} parameters = {parameter_size} MB")
-
-    """## Model Training"""
-
-    losses = []
-    for epoch, (tokens, states) in tqdm.auto.tqdm(
-        enumerate(data_loader), total=num_epochs
-    ):
-        # print(tokens.device, states.device)
-        tokens = tokens.cuda()
-        logits = model(tokens)
-        loss = loss_fn(logits, tokens)
-        loss.backward()
-        if max_grad_norm is not None:
-            t.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad()
-        scheduler.step()
-        losses.append(loss.item())
-        if epoch % 100 == 0:
-            print(f"Epoch {epoch}: {loss.item()}")
-        if epoch > num_epochs:
-            break
-    return losses
-
-
 model = HookedTransformer(cfg)
 
-
-# %%
-train = False
-from datetime import datetime
-
-timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-model_file_name = f"model_weights_parity_8l_192_{timestamp}.pt"
-model_file_name = "model_weights_parity_8l_192_2023_06_26-07_40_02_PM.pt"
-
-if train:
-    losses = train_basic_model(model, gen, batch_size=32, seed=123)
-    fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
-    fig.show()
-    t.save(model.state_dict(), model_file_name)
-else:
-    model.load_state_dict(t.load(model_file_name))
-
-# %%
-
-
-def to_str(tokens):
-    return "".join([chr(t) for t in tokens])
-
-
-# prompt = t.zeros((1,20), dtype=t.int64)
-# Generate 1000 completions and see how many of them are accepted by the DFA
-def percentage_accepted(prompt):
+def percentage_accepted(prompt=None, model=model, gen=gen):
+    if prompt is None:
+        prompt = t.zeros((1000,1), dtype=t.int64) + ord('B')
     print(f"{prompt.shape=}")
     max_tokens = model.cfg.n_ctx - prompt.shape[1]
     generated_tokens = model.generate(
@@ -203,12 +141,87 @@ def percentage_accepted(prompt):
         do_sample=True,
         temperature=1,
     )
-    generated_strings = [to_str(line).strip("\x00") for line in generated_tokens]
+
+    generated_strings = [
+        gen.detokenize(line).strip("\x00") for line in generated_tokens
+    ]
     print(generated_strings[:10])
     accepted = [gen.dfa.accepts_input(line) for line in generated_strings]
+    gen.pprint_dfa_trajectory(generated_strings[0])
     return sum(accepted) / len(accepted)
+# %%
+def train_basic_model(
+    model, gen: dfa_generator.DfaGenerator, batch_size=64, num_epochs=10_000, seed=123
+):
+    project_name = f"parity-ABC-wandb-develop"
+    with wandb.init(project=project_name, job_type="train"):
+        print(f"Batch size: {batch_size}")
+        lr = 1e-4
+        betas = (0.9, 0.95)
+        max_grad_norm = 1.0
+        wd = 0.01
+        optimizer = t.optim.AdamW(model.parameters(), lr=lr, betas=betas, weight_decay=wd)
+        scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, lambda i: min(i / 100, 1.0))
+        data_loader = gen.dataloader(
+            word_length=cfg.n_ctx, batch_size=batch_size, seed=seed
+        )
+        print(data_loader)
+
+        n_parameters = sum(p.numel() for p in model.parameters())
+        parameter_size = n_parameters * model.parameters().__next__().element_size() / 1e6
+        print(f"Model has {n_parameters} parameters = {parameter_size} MB")
+
+        """## Model Training"""
+
+        losses = []
+        for epoch, (tokens, states) in tqdm.auto.tqdm(
+            enumerate(data_loader), total=num_epochs
+        ):
+            # print(tokens.device, states.device)
+            tokens = tokens.cuda()
+            logits = model(tokens)
+            loss = loss_fn(logits, tokens)
+            loss.backward()
+            if max_grad_norm is not None:
+                t.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
+            losses.append(loss.item())
+            log_dict = dict(
+                loss=loss.item(),
+            )
+            if epoch % 100 == 0:
+                accept_frac = percentage_accepted(model=model, gen=gen)
+                log_dict["accept_frac"] = accept_frac
+                print(f"Epoch {epoch}: {loss.item()} {accept_frac=}")
+            wandb.log(log_dict)
+            if epoch > num_epochs:
+                break
+        return losses
 
 
+# %%
+train = True
+from datetime import datetime
+
+timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
+model_file_name = f"model_weights_parity_8l_192_{timestamp}.pt"
+model_file_name = "model_weights_parity_8l_192_2023_06_26-07_40_02_PM.pt"
+
+if train:
+    losses = train_basic_model(model, gen, batch_size=32, num_epochs=50_000, seed=123)
+    fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
+    fig.show()
+    t.save(model.state_dict(), model_file_name)
+else:
+    model.load_state_dict(t.load(model_file_name))
+
+# %%
+
+
+# prompt = t.zeros((1,20), dtype=t.int64)
+# Generate 1000 completions and see how many of them are accepted by the DFA
 print(
     f"Fraction of accepted completions: {percentage_accepted(t.zeros((1000,1), dtype=t.int64) + ord('B'))}"
 )
@@ -299,7 +312,7 @@ prompt = t.zeros((2000, 1), dtype=t.int64) + ord("A")
 generated_tokens = model.generate(
     input=prompt, eos_token_id=0, max_new_tokens=31, do_sample=True, temperature=1
 )
-generated_strings = [to_str(line).strip("\x00") for line in generated_tokens]
+generated_strings = [gen.detokenize(line).strip("\x00") for line in generated_tokens]
 for string in generated_strings:
     print_dfa_trajectory(dfa, string)
     print()
@@ -403,8 +416,9 @@ def hist(tensor, renderer=None, **kwargs):
 
 # %%
 
+
 # %%
-def show_heads(model, word: str, layer: Optional[int] =None):
+def show_heads(model, word: str, layer: Optional[int] = None):
     with t.inference_mode():
         model.eval()
         logits, cache = model.run_with_cache(gen.tokenize(word))
@@ -412,7 +426,10 @@ def show_heads(model, word: str, layer: Optional[int] =None):
     for layer in layers:
         attn = cache["pattern", layer][0].squeeze(0)
         print(f"layer {layer}")
-        display(circuitsvis.attention.attention_heads(tokens=list(word), attention=attn))
+        display(
+            circuitsvis.attention.attention_heads(tokens=list(word), attention=attn)
+        )
+
 
 show_heads(model, "BBBBBBABBBABBB")
 # %% [markdown]
@@ -431,7 +448,7 @@ show_heads(model, "BBBBBBABBBABBB")
 # (mino) `l1h1` kinda pays attention to the latest A only
 # %%
 
-show_heads(model, "BBBCBBABBBABBBCBBBA")
+# show_heads(model, "BBBCBBABBBABBBCBBBA")
 # %%
 show_heads(model, "BBABBABBABBABBABBABB")
 # %% [markdown]
