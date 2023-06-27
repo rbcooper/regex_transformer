@@ -1,13 +1,16 @@
 # %%
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 from dataclasses import dataclass
-from typing import Dict, Generator, Tuple
+from typing import Dict, Generator, Optional, Tuple, Union
+import functools
+import hashlib
 
 import torch as t
 from automata.fa.dfa import DFA
 from automata.fa.fa import FA
 from automata.fa.nfa import NFA
+import rich
 
 from frozendict import frozendict
 from IPython.display import display, Image
@@ -107,7 +110,7 @@ class DfaGenerator:
             yield self.get_batches_and_states(word_len, batch_size, seed=seed)
 
     @staticmethod
-    def from_regex(regex: str) -> DFA:
+    def from_regex(regex: str):
         dfa = dfa_from_regex(regex)
         return DfaGenerator(dfa)
 
@@ -120,35 +123,99 @@ class DfaGenerator:
         elif len(tensor.shape) == 2:
             return [self.detokenize(w) for w in tensor]
 
-    def display_fa(self):
+    def _tensorize_tokens_function(self, func, dtype):
+        @functools.wraps(func)
+        def fun(s: Union[str, t.Tensor]):
+            if isinstance(s, str):
+                return func(s)
+            elif isinstance(s, t.Tensor):
+                if s.dim() == 1:
+                    return func(self.detokenize(s))
+                elif s.dim() == 2:
+                    batch, length = s.shape
+                    result = t.zeros((batch), dtype=dtype, device=s.device)
+                    for i in range(batch):
+                        result[i] = func(self.detokenize(s[i]))
+                    return result
+            else:
+                raise ValueError(f"Unknown input type: {type(s)}")
+
+        return fun
+
+    def display_fa(self) -> None:
         """Displays a finite automaton in a Jupyter Notebook"""
         display_fa(self.dfa)
 
-    def dataset(self, length=20) -> Dataset:
-        return DfaDataset(self, length)
+    def dataset(self, word_length: int, seed=None) -> Dataset:
+        """A torch dataset yielding (random_word, dfa_state) pairs)
+        dfa_state is sequence length + 1, because the initial state is included
+        """
+        return DfaDataset(self, word_length, seed=seed)
+
+    def dataloader(self, word_length: int, batch_size: int, seed=None) -> DataLoader:
+        return DataLoader(self.dataset(word_length), batch_size=batch_size)
+
+    def accepts(self, chars: Union[str, t.Tensor]) -> Union[bool, t.Tensor]:
+        """Returns true if the dfa accepts the given string.
+        If the input is a 1-d tensor, detokenize it first.  If the input is a 2-d
+        tensor, apply accepts to each row and return a 1-d tensor of bools."""
+
+        def accept(chars: str):
+            return self.dfa.accepts_input(chars)
+
+        return self._tensorize_tokens_function(accept, t.bool)(chars)
+
+    def random_word(self, length: int, seed: int = None) -> str:
+        return self.dfa.random_word(length, seed=seed)
+
+    def pprint_dfa_trajectory(self, s: Union[str, t.Tensor]) -> None:
+        """"""
+        line1 = " " + s
+        states = self.dfa.read_input_stepwise(s, ignore_rejection=True)
+        # Print states, highlighting rejection states in red
+        state_parts = []
+        for state in states:
+            if state in self.dfa.final_states:
+                state_parts.append(f"[green]{state}[/green]")
+            else:
+                if state is None:
+                    state = "�"
+                state_parts.append(f"[red]{state}[/red]")
+        line2 = "".join(state_parts)
+        rich.print("\n".join([line1, line2]))
 
 
 class DfaDataset(Dataset):
-    def __init__(self, dfa_gen: DfaGenerator, static_length: int):
+    def __init__(
+        self, dfa_gen: DfaGenerator, static_length: int, *, seed: Optional[int] = None
+    ):
         self.dfa_gen = dfa_gen
         self.dfa = dfa_gen.dfa
         self.word_len = static_length
+        self.seed = seed
+
+    def _munge_number(self, idx: int, seed: int) -> int:
+        if self.seed is None:
+            return idx
+        idx ^= 1494354063
+        seed ^= 882_789_810
+        return (idx * seed) % (2**31)
 
     def __len__(self):
         return (2**31) - 1
 
     def __getitem__(self, idx):
-        seed = idx
-        word = self.dfa.random_word(k=self.word_len, seed=seed)
-        word_states = self.dfa.read_input_stepwise(word)
-        # TODO switch to constructing dataset / dataloader
+        word = self.dfa.random_word(
+            k=self.word_len, seed=self._munge_number(self.seed, idx)
+        )
+        word_states = self.dfa.read_input_stepwise(word, ignore_rejection=True)
         batches = t.tensor(list(ord(w) for w in word))
         states = t.tensor(list(int(s) for s in word_states))
         return batches, states
 
 
 # %%
-C_IF_EVEN_AS_DFA_GEN = DfaGenerator.from_regex("((B|C)*AB*A)*(B|C)*")
+C_IF_EVEN_AS_DFA_GEN = DfaGenerator.from_regex("((B|C)*AB*A)*(B|C)*A?B*")
 
 
 # %%
