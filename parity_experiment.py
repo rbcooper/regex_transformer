@@ -1,25 +1,39 @@
 """
 Experiment training a model on the parity task
 """
+# %%
+import random
+
+from importlib import reload
+from typing import List, Optional
+
+import circuitsvis
+import dfa_generator
+import numpy as np
+import plotly.express as px
+from IPython.display import display
+
+import torch as t
+import tqdm
+
+import transformer_lens
+from automata.fa.dfa import DFA
+from dfa_generator import DfaGenerator
+from einops import rearrange, reduce, repeat
+
+from sklearn.linear_model import LogisticRegression
+from transformer_lens import HookedTransformer
 
 # %%
 
-import torch as t
+
+def refresh():
+    reload(dfa_generator)
+    global gen
+    gen = dfa_generator.DfaGenerator.from_regex("((B|C)*AB*A)*(B|C)*A?B*")
 
 
-import transformer_lens
-from transformer_lens import HookedTransformer
-import numpy as np
-import random
-import plotly.express as px
-import tqdm
-import dfa_generator
-from dfa_generator import DfaGenerator
-# sklearn logistic regression
-from sklearn.linear_model import LogisticRegression
-from einops import reduce, repeat, rearrange
-from automata.fa.dfa import DFA
-
+# %%
 
 device = "cuda"
 # %%
@@ -28,47 +42,49 @@ transformer_lens.HookedTransformerConfig
 # reference_model = HookedTransformer.from_pretrained("gelu-4l", fold_ln=False, center_unembed=False, center_writing_weights=False)
 # %%
 
-cfg = transformer_lens.HookedTransformerConfig(**
-{'act_fn': 'gelu',
- 'attention_dir': 'causal',
- 'attn_only': False,
- 'attn_types': None,
- 'checkpoint_index': None,
- 'checkpoint_label_type': None,
- 'checkpoint_value': None,
- 'd_head': 32,
- 'd_mlp': 768,
- 'd_model': 192,
- 'd_vocab': 256,
- 'd_vocab_out': 256,
- 'device': 'cuda',
- 'eps': 1e-05,
- 'final_rms': False,
- 'from_checkpoint': False,
- 'gated_mlp': False,
- 'init_mode': 'gpt2',
- 'init_weights': True,
- # 'initializer_range': 0.035355339059327376,
- 'model_name': 'GELU_4L512W_C4_Code',
- 'n_ctx': 32,
- 'n_devices': 1,
- 'n_heads': 4,
- 'n_layers': 8,
- # 'n_params': 12582912,
- 'normalization_type': 'LN',
- 'original_architecture': 'neel',
- 'parallel_attn_mlp': False,
- 'positional_embedding_type': 'standard',
- 'rotary_dim': None,
- 'scale_attn_by_inverse_layer_idx': False,
- 'seed': None,
-#  'tokenizer_name': 'NeelNanda/gpt-neox-tokenizer-digits',
- 'use_attn_result': False,
- 'use_attn_scale': True,
- 'use_hook_tokens': False,
- 'use_local_attn': False,
- 'use_split_qkv_input': False,
- 'window_size': None}
+cfg = transformer_lens.HookedTransformerConfig(
+    **{
+        "act_fn": "gelu",
+        "attention_dir": "causal",
+        "attn_only": False,
+        "attn_types": None,
+        "checkpoint_index": None,
+        "checkpoint_label_type": None,
+        "checkpoint_value": None,
+        "d_head": 32,
+        "d_mlp": 768,
+        "d_model": 192,
+        "d_vocab": 256,
+        "d_vocab_out": 256,
+        "device": "cuda",
+        "eps": 1e-05,
+        "final_rms": False,
+        "from_checkpoint": False,
+        "gated_mlp": False,
+        "init_mode": "gpt2",
+        "init_weights": True,
+        # 'initializer_range': 0.035355339059327376,
+        "model_name": "GELU_4L512W_C4_Code",
+        "n_ctx": 32,
+        "n_devices": 1,
+        "n_heads": 4,
+        "n_layers": 8,
+        # 'n_params': 12582912,
+        "normalization_type": "LN",
+        "original_architecture": "neel",
+        "parallel_attn_mlp": False,
+        "positional_embedding_type": "standard",
+        "rotary_dim": None,
+        "scale_attn_by_inverse_layer_idx": False,
+        "seed": None,
+        #  'tokenizer_name': 'NeelNanda/gpt-neox-tokenizer-digits',
+        "use_attn_result": False,
+        "use_attn_scale": True,
+        "use_hook_tokens": False,
+        "use_local_attn": False,
+        "use_split_qkv_input": False,
+        "window_size": None,
+    }
 )
 
 # %%
@@ -80,7 +96,7 @@ model = HookedTransformer(cfg)
 # %%
 
 # 2 can only appear after an even number of 0s
-gen = dfa_generator.DfaGenerator.from_regex('((B|C)*AB*A)*(B|C)*A?B*')
+gen = dfa_generator.DfaGenerator.from_regex("((B|C)*AB*A)*(B|C)*A?B*")
 # gen = dfa_generator.DfaGenerator.from_regex('(ROBERT|THOMAS|X)*')
 data_loader = gen.batches_and_states_gen(word_len=32, batch_size=32)
 batch, states = data_loader.__next__()
@@ -93,11 +109,11 @@ def loss_fn(logits, tokens, return_per_token=False):
     # logit shape: [batch, pos, vocab]
     # token shape: [batch, pos]
     # assert False
-    logits = logits[:, :-1] # ignore last logit
-    tokens = tokens[:, 1:] # ignore first token (bos token)
+    logits = logits[:, :-1]  # ignore last logit
+    tokens = tokens[:, 1:]  # ignore first token (bos token)
     log_probs = logits.log_softmax(-1)
     correct_log_probs = log_probs.gather(-1, tokens[..., None])[..., 0]
-    loss = -correct_log_probs.mean() # mean over batch and pos
+    loss = -correct_log_probs.mean()  # mean over batch and pos
     return loss
 
 
@@ -105,15 +121,20 @@ def loss_fn(logits, tokens, return_per_token=False):
 # aa_train = make_aa_generator(seed=123)
 # aa_test = make_aa_generator(seed=456)
 
-def train_basic_model(model, gen:dfa_generator.DfaGenerator, batch_size=64, num_epochs=10_000, seed=123):
+
+def train_basic_model(
+    model, gen: dfa_generator.DfaGenerator, batch_size=64, num_epochs=10_000, seed=123
+):
     print(f"Batch size: {batch_size}")
     lr = 1e-4
     betas = (0.9, 0.95)
     max_grad_norm = 1.0
     wd = 0.01
     optimizer = t.optim.AdamW(model.parameters(), lr=lr, betas=betas, weight_decay=wd)
-    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, lambda i: min(i/100, 1.))
-    data_loader = t.utils.data.DataLoader(gen.dataset(length=model.cfg.n_ctx), batch_size=batch_size)
+    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, lambda i: min(i / 100, 1.0))
+    data_loader = t.utils.data.DataLoader(
+        gen.dataset(length=model.cfg.n_ctx), batch_size=batch_size
+    )
     print(data_loader)
 
     n_parameters = sum(p.numel() for p in model.parameters())
@@ -123,7 +144,9 @@ def train_basic_model(model, gen:dfa_generator.DfaGenerator, batch_size=64, num_
     """## Model Training"""
 
     losses = []
-    for epoch, (tokens, states) in tqdm.auto.tqdm(enumerate(data_loader), total=num_epochs):
+    for epoch, (tokens, states) in tqdm.auto.tqdm(
+        enumerate(data_loader), total=num_epochs
+    ):
         # print(tokens.device, states.device)
         tokens = tokens.cuda()
         logits = model(tokens)
@@ -136,10 +159,11 @@ def train_basic_model(model, gen:dfa_generator.DfaGenerator, batch_size=64, num_
         scheduler.step()
         losses.append(loss.item())
         if epoch % 100 == 0:
-            print(f'Epoch {epoch}: {loss.item()}')
+            print(f"Epoch {epoch}: {loss.item()}")
         if epoch > num_epochs:
             break
     return losses
+
 
 model = HookedTransformer(cfg)
 
@@ -147,13 +171,14 @@ model = HookedTransformer(cfg)
 # %%
 train = False
 from datetime import datetime
+
 timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-model_file_name = f'model_weights_parity_8l_192_{timestamp}.pt'
+model_file_name = f"model_weights_parity_8l_192_{timestamp}.pt"
 model_file_name = "model_weights_parity_8l_192_2023_06_26-07_40_02_PM.pt"
 
 if train:
     losses = train_basic_model(model, gen, batch_size=32, seed=123)
-    fig = px.line(losses, labels={"x":"Epoch", "y":"Loss"})
+    fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
     fig.show()
     t.save(model.state_dict(), model_file_name)
 else:
@@ -161,25 +186,36 @@ else:
 
 # %%
 
+
 def to_str(tokens):
     return "".join([chr(t) for t in tokens])
+
 
 # prompt = t.zeros((1,20), dtype=t.int64)
 # Generate 1000 completions and see how many of them are accepted by the DFA
 def percentage_accepted(prompt):
     print(f"{prompt.shape=}")
     max_tokens = model.cfg.n_ctx - prompt.shape[1]
-    generated_tokens = model.generate(input=prompt,
-                            eos_token_id=0, max_new_tokens=max_tokens,
-                            do_sample=True, temperature=1)
-    generated_strings = [to_str(line).strip('\x00') for line in generated_tokens]
+    generated_tokens = model.generate(
+        input=prompt,
+        eos_token_id=0,
+        max_new_tokens=max_tokens,
+        do_sample=True,
+        temperature=1,
+    )
+    generated_strings = [to_str(line).strip("\x00") for line in generated_tokens]
     print(generated_strings[:10])
     accepted = [gen.dfa.accepts_input(line) for line in generated_strings]
-    return sum(accepted)/len(accepted)
+    return sum(accepted) / len(accepted)
 
-print(f"Fraction of accepted completions: {percentage_accepted(t.zeros((1000,1), dtype=t.int64) + ord('B'))}")
 
-tokens, states = gen.batches_and_states_gen(batch_size=1000, word_len=model.cfg.n_ctx).__next__()
+print(
+    f"Fraction of accepted completions: {percentage_accepted(t.zeros((1000,1), dtype=t.int64) + ord('B'))}"
+)
+
+tokens, states = gen.batches_and_states_gen(
+    batch_size=1000, word_len=model.cfg.n_ctx
+).__next__()
 print(tokens.device)
 
 
@@ -200,19 +236,25 @@ assert states[(states != 1) & (states != 2)].flatten().sum() == 0
 
 # 0 = even, 1 = odd
 states_transformed = states - 1
-states_transformed = rearrange(states_transformed[:, 1:], 'b p -> (b p)').cpu().detach().numpy()
+states_transformed = (
+    rearrange(states_transformed[:, 1:], "b p -> (b p)").cpu().detach().numpy()
+)
 
-for layer in range(model.cfg.n_layers):
-    for loc in ('mid', 'post'):
-        resid = cache['resid_'+loc, layer]
-        resid = rearrange(resid[:, :], 'b p d_model -> (b p) d_model')
-        resid = resid.cpu().detach().numpy()
-        # Use logistic regression to predict whether there are an even number of As
-        lr = LogisticRegression(max_iter=10000, solver='lbfgs')
-        lr.fit(resid, states_transformed)
 
-        score = lr.score(resid, states_transformed)
-        print(f"Score for {layer} {loc}: {score}")
+# %%
+train_probes = False
+if train_probes:
+    for layer in range(model.cfg.n_layers):
+        for loc in ("mid", "post"):
+            resid = cache["resid_" + loc, layer]
+            resid = rearrange(resid[:, :], "b p d_model -> (b p) d_model")
+            resid = resid.cpu().detach().numpy()
+            # Use logistic regression to predict whether there are an even number of As
+            lr = LogisticRegression(max_iter=10000, solver="lbfgs")
+            lr.fit(resid, states_transformed)
+
+            score = lr.score(resid, states_transformed)
+            print(f"Score for {layer} {loc}: {score}")
 # %%
 
 # Hypothesis: the model counts the number of As since the last C, then computes even/odd
@@ -224,7 +266,7 @@ print(prompt.shape)
 print(f"Baseline performance: {percentage_accepted(prompt)}")
 
 tokens_noised = tokens.clone()
-tokens_noised[tokens_noised == ord('C')] = ord('B')
+tokens_noised[tokens_noised == ord("C")] = ord("B")
 prompt_noised = tokens_noised[:, :16]
 print(f"Performance with all C replaced by B: {percentage_accepted(tokens_noised)}")
 # accuracy seems to increase because the model now refuses to generate Cs
@@ -232,31 +274,32 @@ print(f"Performance with all C replaced by B: {percentage_accepted(tokens_noised
 
 # %%
 
-dfa:DFA = gen.dfa
-dfa.accepts_input('AABCCBBCBAABBCBAAABCAABAABBACCA')
-list(dfa.read_input_stepwise('AABCCBBCBAABBCBAAABCAABAABBACCA', ignore_rejection=True))
+dfa: DFA = gen.dfa
+dfa.accepts_input("AABCCBBCBAABBCBAAABCAABAABBACCA")
+list(dfa.read_input_stepwise("AABCCBBCBAABBCBAAABCAABAABBACCA", ignore_rejection=True))
 
-def print_dfa_trajectory(dfa:DFA, s):
-    """ s is input string """
-    print(' ' + s)
+
+def print_dfa_trajectory(dfa: DFA, s):
+    """s is input string"""
+    print(" " + s)
     states = dfa.read_input_stepwise(s, ignore_rejection=True)
     # Print states, highlighting rejection states in red
     for state in states:
         if state not in dfa.final_states:
-            print(f"\033[91m{state}\033[0m", end='')
+            print(f"\033[91m{state}\033[0m", end="")
         else:
-            print(state, end='')
+            print(state, end="")
     print()
 
 
 # %%
 
 # Exploring the model's errors
-prompt = t.zeros((2000,1), dtype=t.int64) + ord('A')
-generated_tokens = model.generate(input=prompt,
-                            eos_token_id=0, max_new_tokens=31,
-                            do_sample=True, temperature=1)
-generated_strings = [to_str(line).strip('\x00') for line in generated_tokens]
+prompt = t.zeros((2000, 1), dtype=t.int64) + ord("A")
+generated_tokens = model.generate(
+    input=prompt, eos_token_id=0, max_new_tokens=31, do_sample=True, temperature=1
+)
+generated_strings = [to_str(line).strip("\x00") for line in generated_tokens]
 for string in generated_strings:
     print_dfa_trajectory(dfa, string)
     print()
@@ -276,10 +319,39 @@ fig.show()
 # Callum's graphing functions
 
 update_layout_set = {
-    "xaxis_range", "yaxis_range", "hovermode", "xaxis_title", "yaxis_title", "colorbar", "colorscale", "coloraxis", "title_x", "bargap", "bargroupgap", "xaxis_tickformat",
-    "yaxis_tickformat", "title_y", "legend_title_text", "xaxis_showgrid", "xaxis_gridwidth", "xaxis_gridcolor", "yaxis_showgrid", "yaxis_gridwidth", "yaxis_gridcolor",
-    "showlegend", "xaxis_tickmode", "yaxis_tickmode", "xaxis_tickangle", "yaxis_tickangle", "margin", "xaxis_visible", "yaxis_visible", "bargap", "bargroupgap"
+    "xaxis_range",
+    "yaxis_range",
+    "hovermode",
+    "xaxis_title",
+    "yaxis_title",
+    "colorbar",
+    "colorscale",
+    "coloraxis",
+    "title_x",
+    "bargap",
+    "bargroupgap",
+    "xaxis_tickformat",
+    "yaxis_tickformat",
+    "title_y",
+    "legend_title_text",
+    "xaxis_showgrid",
+    "xaxis_gridwidth",
+    "xaxis_gridcolor",
+    "yaxis_showgrid",
+    "yaxis_gridwidth",
+    "yaxis_gridcolor",
+    "showlegend",
+    "xaxis_tickmode",
+    "yaxis_tickmode",
+    "xaxis_tickangle",
+    "yaxis_tickangle",
+    "margin",
+    "xaxis_visible",
+    "yaxis_visible",
+    "bargap",
+    "bargroupgap",
 }
+
 
 def imshow(tensor, renderer=None, **kwargs):
     kwargs_post = {k: v for k, v in kwargs.items() if k in update_layout_set}
@@ -290,22 +362,27 @@ def imshow(tensor, renderer=None, **kwargs):
         kwargs_pre["color_continuous_scale"] = "RdBu"
     if "margin" in kwargs_post and isinstance(kwargs_post["margin"], int):
         kwargs_post["margin"] = dict.fromkeys(list("tblr"), kwargs_post["margin"])
-    fig = px.imshow(transformer_lens.utils.to_numpy(tensor), color_continuous_midpoint=0.0, **kwargs_pre)
+    fig = px.imshow(
+        transformer_lens.utils.to_numpy(tensor),
+        color_continuous_midpoint=0.0,
+        **kwargs_pre,
+    )
     if facet_labels:
         for i, label in enumerate(facet_labels):
-            fig.layout.annotations[i]['text'] = label
+            fig.layout.annotations[i]["text"] = label
     if border:
-        fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
-        fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
+        fig.update_xaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
+        fig.update_yaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
     # things like `xaxis_tickmode` should be applied to all subplots. This is super janky lol but I'm under time pressure
     for setting in ["tickangle"]:
-      if f"xaxis_{setting}" in kwargs_post:
-          i = 2
-          while f"xaxis{i}" in fig["layout"]:
-            kwargs_post[f"xaxis{i}_{setting}"] = kwargs_post[f"xaxis_{setting}"]
-            i += 1
+        if f"xaxis_{setting}" in kwargs_post:
+            i = 2
+            while f"xaxis{i}" in fig["layout"]:
+                kwargs_post[f"xaxis{i}_{setting}"] = kwargs_post[f"xaxis_{setting}"]
+                i += 1
     fig.update_layout(**kwargs_post)
     fig.show(renderer=renderer)
+
 
 def hist(tensor, renderer=None, **kwargs):
     kwargs_post = {k: v for k, v in kwargs.items() if k in update_layout_set}
@@ -322,5 +399,44 @@ def hist(tensor, renderer=None, **kwargs):
         for i in range(len(fig.data)):
             fig.data[i]["name"] = names[i // 2]
     fig.show(renderer)
-# %% 
 
+
+# %%
+
+# %%
+def show_heads(model, word: str, layer: Optional[int] =None):
+    with t.inference_mode():
+        model.eval()
+        logits, cache = model.run_with_cache(gen.tokenize(word))
+    layers = [layer] if layer is not None else range(model.cfg.n_layers)
+    for layer in layers:
+        attn = cache["pattern", layer][0].squeeze(0)
+        print(f"layer {layer}")
+        display(circuitsvis.attention.attention_heads(tokens=list(word), attention=attn))
+
+show_heads(model, "BBBBBBABBBABBB")
+# %% [markdown]
+
+## Notes for string *BBBBBBABBBABBB*
+### Layer 0:
+# `l0h0` pays attention to As.  With two A's it appears to be roughly equal
+# Other heads appear to be uninteresting
+
+### Layer 1:
+# `l1h3` pays attention to the latest A only (But note with Cs)
+# (mino) `l1h1` kinda pays attention to the latest A only
+
+### Layer 2:
+# `l1h3` pays attention to the latest A only
+# (mino) `l1h1` kinda pays attention to the latest A only
+# %%
+
+show_heads(model, "BBBCBBABBBABBBCBBBA")
+# %%
+show_heads(model, "BBABBABBABBABBABBABB")
+# %% [markdown]
+# # For * "BBABBABBABBABBABBABB"*
+# Layer 7 head 1 is odd regions paying attention to odd regions and even regions paying attention to even regions?
+#  One big exception to this for tokens after the last A.
+# Layer 7 other heads basically pay attention to only tokens at even regions, with, again execption after the last A
+# %%
