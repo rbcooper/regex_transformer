@@ -10,3 +10,8 @@ poetry.lock
 
 wandb
 MNIST
+
+
+# Model weights
+model_weights_*
+checkpoint_*
