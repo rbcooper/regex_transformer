@@ -13,5 +13,5 @@ MNIST
 
 
 # Model weights
-model_weights_*
+model_weights*
 checkpoint_*
