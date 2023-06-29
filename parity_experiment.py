@@ -26,6 +26,8 @@ from IPython.display import display
 from sklearn.linear_model import LogisticRegression
 from transformer_lens import HookedTransformer
 
+import models
+
 # %%
 
 
@@ -66,7 +68,7 @@ cfg = transformer_lens.HookedTransformerConfig(
         "init_mode": "gpt2",
         "init_weights": True,
         # 'initializer_range': 0.035355339059327376,
-        "model_name": "GELU_4L512W_C4_Code",
+        "model_name": "regex-tester",
         "n_ctx": 32,
         "n_devices": 1,
         "n_heads": 4,
@@ -119,19 +121,16 @@ def loss_fn(logits, tokens, return_per_token=False):
     return loss
 
 
-import wandb
-
-wandb.Artifact("dfa", type="dfa", metadata={"dfa": gen.dfa})
-
 # %%
 # aa_train = make_aa_generator(seed=123)
 # aa_test = make_aa_generator(seed=456)
 
 model = HookedTransformer(cfg)
 
+
 def percentage_accepted(prompt=None, model=model, gen=gen):
     if prompt is None:
-        prompt = t.zeros((1000,1), dtype=t.int64) + ord('B')
+        prompt = t.zeros((1000, 1), dtype=t.int64) + ord("B")
     print(f"{prompt.shape=}")
     max_tokens = model.cfg.n_ctx - prompt.shape[1]
     generated_tokens = model.generate(
@@ -149,26 +148,34 @@ def percentage_accepted(prompt=None, model=model, gen=gen):
     accepted = [gen.dfa.accepts_input(line) for line in generated_strings]
     gen.pprint_dfa_trajectory(generated_strings[0])
     return sum(accepted) / len(accepted)
+
+
 # %%
 def train_basic_model(
     model, gen: dfa_generator.DfaGenerator, batch_size=64, num_epochs=10_000, seed=123
 ):
     project_name = f"parity-ABC-wandb-develop"
-    with wandb.init(project=project_name, job_type="train"):
+    with wandb.init(project=project_name, job_type="train") as run:
         print(f"Batch size: {batch_size}")
         lr = 1e-4
         betas = (0.9, 0.95)
         max_grad_norm = 1.0
         wd = 0.01
-        optimizer = t.optim.AdamW(model.parameters(), lr=lr, betas=betas, weight_decay=wd)
-        scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, lambda i: min(i / 100, 1.0))
+        optimizer = t.optim.AdamW(
+            model.parameters(), lr=lr, betas=betas, weight_decay=wd
+        )
+        scheduler = t.optim.lr_scheduler.LambdaLR(
+            optimizer, lambda i: min(i / 100, 1.0)
+        )
         data_loader = gen.dataloader(
             word_length=cfg.n_ctx, batch_size=batch_size, seed=seed
         )
         print(data_loader)
 
         n_parameters = sum(p.numel() for p in model.parameters())
-        parameter_size = n_parameters * model.parameters().__next__().element_size() / 1e6
+        parameter_size = (
+            n_parameters * model.parameters().__next__().element_size() / 1e6
+        )
         print(f"Model has {n_parameters} parameters = {parameter_size} MB")
 
         """## Model Training"""
@@ -195,26 +202,27 @@ def train_basic_model(
                 accept_frac = percentage_accepted(model=model, gen=gen)
                 log_dict["accept_frac"] = accept_frac
                 print(f"Epoch {epoch}: {loss.item()} {accept_frac=}")
-            wandb.log(log_dict)
+            run.log(log_dict)
             if epoch > num_epochs:
                 break
         return losses
-
 
 # %%
 train = True
 from datetime import datetime
 
 timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-model_file_name = f"model_weights_parity_8l_192_{timestamp}.pt"
-model_file_name = "model_weights_parity_8l_192_2023_06_26-07_40_02_PM.pt"
+model_file_name = f"model_weights_parity_{cfg.n_layers}l_{cfg.d_model}_{timestamp}.pt"
 
 if train:
-    losses = train_basic_model(model, gen, batch_size=32, num_epochs=50_000, seed=123)
+    losses = train_basic_model(
+        model, gen, batch_size=32, num_epochs=20_000, seed=123
+    )
     fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
     fig.show()
     t.save(model.state_dict(), model_file_name)
 else:
+    model_file_name = "model_weights_parity_8l_192_2023_06_26-07_40_02_PM.pt"
     model.load_state_dict(t.load(model_file_name))
 
 # %%
@@ -260,6 +268,7 @@ if train_probes:
     for layer in range(model.cfg.n_layers):
         for loc in ("mid", "post"):
             resid = cache["resid_" + loc, layer]
+            # Independent variable for the probe is the residual at just that position
             resid = rearrange(resid[:, :], "b p d_model -> (b p) d_model")
             resid = resid.cpu().detach().numpy()
             # Use logistic regression to predict whether there are an even number of As
