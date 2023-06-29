@@ -277,6 +277,30 @@ class CubieRepresentation(CubePuzzle):
         # print(f"{cubie_id=} at {x, y, z=} has color {colors[ret]} on {'xyz'[axis]}")
         return ret
 
+    def positions_to_int(self) -> np.ndarray:
+        # Returns an 8-element list of this cube's cubie positions.
+        locations_binary = (self.cubie_locations + 1) // 2
+        return locations_binary @ np.array([4, 2, 1])
+
+    def positions_rotations_to_int(self) -> np.ndarray:
+        # Returns an 8-element list of cubie positions and rotations, encoded between 0 and 23.
+        positions = self.positions_to_int()
+        rotations = self.cubie_rotations[:, 0]
+        return positions * 3 + rotations
+
+    def inverse_positions_to_int(self) -> np.ndarray:
+        # Returns an 8-element list of the cubie ID at each position.
+        positions = self.positions_to_int()
+        return np.argsort(positions)
+
+    def inverse_positions_rotations_to_int(self) -> np.ndarray:
+        # Returns an 8-element list of cubie IDs and rotations at each position, encoded between 0 and 23.
+        inverse_positions = self.inverse_positions_to_int()
+        rotations = self.cubie_rotations[:, 0]
+        return inverse_positions * 3 + rotations
+
+
+
     @classmethod
     def generate_random_data(cls, data_length: int, seed: int) -> Tuple[list, list]:
         """
