@@ -21,7 +21,7 @@ import transformer_lens
 import wandb
 from automata.fa.dfa import DFA
 import rubiks_generator
-from rubiks_generator import CubePuzzle111, CubieRepresentation
+# from rubiks_generator import CubePuzzle111, CubieRepresentation
 from einops import rearrange, reduce, repeat
 from IPython.display import display
 
@@ -161,7 +161,7 @@ def train_basic_model(
         scheduler = t.optim.lr_scheduler.LambdaLR(
             optimizer, lambda i: min(i / 100, 1.0)
         )
-        data_loader = CubieRepresentation.dataloader(
+        data_loader = rubiks_generator.CubieRepresentation.dataloader(
             data_length=cfg.n_ctx, batch_size=batch_size, seed=seed
         )
 
@@ -174,9 +174,7 @@ def train_basic_model(
         """## Model Training"""
         model.train()
         losses = []
-        for epoch, (tokens, states) in tqdm.auto.tqdm(
-            enumerate(data_loader), total=num_epochs
-        ):
+        for epoch, (tokens, states) in tqdm.auto.tqdm(enumerate(data_loader), total=num_epochs):
             # print(tokens)
             tokens = tokens.cuda()
             logits = model(tokens)
@@ -227,7 +225,7 @@ if __name__ == "__main__":
 if __name__ == "__main__":
     with t.inference_mode():
         model.eval()
-        dl = CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32)
+        dl = rubiks_generator.CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32)
 
         for tokens, states in dl:
             tokens = tokens.cuda()

@@ -12,7 +12,7 @@ from copy import deepcopy
 from einops import rearrange, repeat
 
 
-cube_colors = "⬜🟨🟦🟩🟥🟧"
+cube_colors = "⬜🟨🟩🟦🟥🟧"
 basic_moves = "UDLRFB"
 
 all_moves = []
@@ -53,7 +53,7 @@ class CubePuzzle:
         return CubePuzzleDataset(cls, data_length=data_length, seed=seed)
 
     @classmethod
-    def dataloader(cls, data_length: int, batch_size: int, seed=None) -> DataLoader:
+    def dataloader(cls, data_length: int, batch_size: int, seed=None, num_workers=4) -> DataLoader:
         def my_collate(batch):
             data = t.stack([item[0] for item in batch])
             cube_state = [item[1] for item in batch]
@@ -63,6 +63,7 @@ class CubePuzzle:
             cls.dataset(data_length, seed=seed),
             batch_size=batch_size,
             collate_fn=my_collate,
+            num_workers=num_workers,
         )
 
     @classmethod
@@ -180,9 +181,9 @@ class CubePuzzleDataset(Dataset):
         self.data_length = data_length
         self.seed = seed
         self.prepend_eos = prepend_eos
-        print(
-            f"dataset to generate data of length {self.data_length - self.prepend_eos}"
-        )
+        # print(
+        #     f"dataset to generate data of length {self.data_length - self.prepend_eos}"
+        # )
 
     def __len__(self):
         return (2**31) - 1
@@ -259,20 +260,36 @@ class CubieRepresentation(CubePuzzle):
         Returns colors as color box emoji
         """
         ret = [None] * 4
-        # Gets sticker values of up face, in order
-        for i in range(len(self.cubie_locations)):
-            if self.cubie_locations[i][2] == 1:
-                # this is on the top face; get the z sticker
-                cubie_location = (self.cubie_locations[i][0] == 1) * 2 + (
-                    self.cubie_locations[i][1] == 1
-                )
-                z_sticker = 3 * i + list(self.cubie_rotations[i]).index(2)
-                ret[cubie_location] = cube_colors[self.sticker_colors[z_sticker]]
+        # # Gets sticker values of up face, in order
+        # for i in range(len(self.cubie_locations)):
+        #     if self.cubie_locations[i][2] == 1:
+        #         # this is on the top face; get the z sticker
+        #         # 0 for (-1, -1, 1); 1 for (-1, 1, 1) etc.
+        #         cubie_location = (self.cubie_locations[i][0] == 1) * 2 + (
+        #             self.cubie_locations[i][1] == 1
+        #         )
+        #         z_sticker = 3 * i + list(self.cubie_rotations[i]).index(2)
+        #         ret[cubie_location] = cube_colors[self.sticker_colors[z_sticker]]
+
+        for i in range(len(ret)):
+            ret[i] = cube_colors[self.color_index_of_sticker_at(2 * (i // 2) - 1, 2 * (i % 2) - 1, 1, axis=2)]
+        # print(f"observations={ret}")
+        # for i in range(len(ret)):
+        #     print(cube_colors[
+        #         self.color_index_of_sticker_at(2 * (i // 2) - 1, 2 * (i % 2) - 1, 1, axis=2)
+        #     ])
+        # for i in range(len(ret)):
+        #     print(f"{i=}")
+        #     assert ret[i] is not None
+        #     assert ret[i] == cube_colors[
+        #         self.color_index_of_sticker_at(2 * (i // 2) - 1, 2 * (i % 2) - 1, 1, axis=2)
+        #     ]
         return ret
 
     def color_index_of_sticker_at(self, x, y, z, axis):
         cubie_id = self.get_cubie_id_of_piece_at(x, y, z)
         original_sticker_axis = self.cubie_rotations[cubie_id][axis]
+        # print(f"{original_sticker_axis=}", end=" ")
         ret = self.sticker_colors[cubie_id * 3 + original_sticker_axis]
         # print(f"{cubie_id=} at {x, y, z=} has color {colors[ret]} on {'xyz'[axis]}")
         return ret
@@ -298,6 +315,16 @@ class CubieRepresentation(CubePuzzle):
         inverse_positions = self.inverse_positions_to_int()
         rotations = self.cubie_rotations[:, 0]
         return inverse_positions * 3 + rotations
+
+    def sticker_colors_to_int(self) -> np.ndarray:
+        # Returns a 24-element list of this cube's sticker colors.
+        ret = []
+        for x in range(-1,2,2):
+            for y in range(-1,2,2):
+                for z in range(-1,2,2):
+                    for axis in range(3):
+                        ret.append(self.color_index_of_sticker_at(x,y,z,axis))
+        return np.array(ret)
 
 
 
@@ -354,8 +381,8 @@ class CubieRepresentation(CubePuzzle):
 
         # Assume the standard orientation (Front face at +x, Up face at +z, Right face at +y)
         l = []
-        l.append("      {}{}".format(c(-1, -1, +1, 2), c(-1, +1, +1, 2)))  # Up face
-        l.append("      {}{}".format(c(+1, -1, +1, 2), c(+1, +1, +1, 2)))
+        l.append("⬛⬛ {}{}".format(c(-1, -1, +1, 2), c(-1, +1, +1, 2)))  # Up face
+        l.append("⬛⬛ {}{}".format(c(+1, -1, +1, 2), c(+1, +1, +1, 2)))
         l.append(
             "{}{} {}{} {}{} {}{}".format(
                 c(-1, -1, +1, 1),
@@ -380,8 +407,8 @@ class CubieRepresentation(CubePuzzle):
                 c(-1, -1, -1, 0),
             )
         )
-        l.append("      {}{}".format(c(+1, -1, -1, 2), c(+1, +1, -1, 2)))  # Down face
-        l.append("      {}{}".format(c(-1, -1, -1, 2), c(-1, +1, -1, 2)))
+        l.append("⬛⬛ {}{}".format(c(+1, -1, -1, 2), c(+1, +1, -1, 2)))  # Down face
+        l.append("⬛⬛ {}{}".format(c(-1, -1, -1, 2), c(-1, +1, -1, 2)))
         to_print = "\n".join(l)
         to_print = to_print.replace("  ", "   ")
         if do_print:
@@ -394,42 +421,46 @@ class CubieRepresentation(CubePuzzle):
 def __dry_test_cube(cubeclass: type) -> None:
     print(f"Dry running {cubeclass}")
     cube = cubeclass()
-    cube.show()
+    # cube.show()
     # for rotation in "UDLRFB":
     #     print(f"{rotation=}")
     #     cube.apply_rotation(rotation)
     #     cube.show()
 
-    data, states = cubeclass.generate_random_data(10, seed=0)
-    print(f"{cubeclass.tokenize(data)=}")
-    ds = cubeclass.dataset(11, seed=0)
-    print(f"{ds[0]=}")
-    dl = cubeclass.dataloader(11, batch_size=32, seed=0)
-    for i, (data, state) in enumerate(dl):
-        print(f"{i=} {data=}")
-        print(f"{state=}")
+    # data, states = cubeclass.generate_random_data(10, seed=0)
+    # print(f"{cubeclass.tokenize(data)=}")
+    # ds = cubeclass.dataset(11, seed=0)
+    # print(f"{ds[0]=}")
+    dl = cubeclass.dataloader(126, batch_size=3, seed=0, num_workers=0)
+    for i, (data, states) in enumerate(dl):
+        for pos in range(25):
+            state = states[0][pos]
+            datum= data[0][pos] # uses observations
+            print(f"{i=} {datum=}")
+            print(f"{state.observations()=}")
+            state.show() # uses color_index_of_sticker_at
         break
 
 
-if __name__ == "__main__":
-    # __dry_test_cube(CubePuzzle222)
-    # __dry_test_cube(CubePuzzle111)
-    __dry_test_cube(CubieRepresentation)
-    # cube = CubieRepresentation()
-    # dl = cube.dataloader(31, batch_size=32, seed=0)
-    # for i, (data, state) in enumerate(dl):    #     print(f"{i=} {data=}")
-    #     break
+# if __name__ == "__main__":
+#     # __dry_test_cube(CubePuzzle222)
+#     # __dry_test_cube(CubePuzzle111)
+#     __dry_test_cube(CubieRepresentation)
+#     # cube = CubieRepresentation()
+#     # dl = cube.dataloader(31, batch_size=32, seed=0)
+#     # for i, (data, state) in enumerate(dl):    #     print(f"{i=} {data=}")
+#     #     break
 
 # %%
 
-dl = CubieRepresentation.dataloader(11, batch_size=3, seed=0)
-for i, (data, states) in enumerate(dl):
-    print(f"{i=} {data=}")
-    print(f"{states=}")
-    my_state = states[0]
-    print(f"There are {len(states)} sequences in the batch, with {len(my_state)} states each.")
-    break
+# dl = CubieRepresentation.dataloader(11, batch_size=3, seed=0)
+# for i, (data, states) in enumerate(dl):
+#     print(f"{i=} {data=}")
+#     print(f"{states=}")
+#     my_state = states[0]
+#     print(f"There are {len(states)} sequences in the batch, with {len(my_state)} states each.")
+#     break
 
-my_state[0].show()
-my_state[1].show()
+# my_state[0].show()
+# my_state[1].show()
 # %%

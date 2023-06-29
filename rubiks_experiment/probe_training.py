@@ -12,6 +12,7 @@ from typing import List
 import wandb
 import plotly.graph_objects as go
 import plotly.express as px
+import pandas as pd
 
 import rubiks_generator
 from rubiks_generator import CubePuzzle111, CubieRepresentation
@@ -21,7 +22,7 @@ cfg = tl.HookedTransformerConfig(**base_transformer_config)
 model = HookedTransformer(cfg).to(device)
 # %% Load data
 
-model_file_name = "/home/ubuntu/regex_transformer/rubiks_experiment/checkpoint_rubiks_6l_256d_126c_100000_2023_06_28-04_24_11_PM.pt"
+model_file_name = "checkpoint_rubiks_6l_256d_126c_50000_2023_06_29-09_23_38_PM.pt"
 model.load_state_dict(t.load(model_file_name))
 
 # %%
@@ -34,20 +35,21 @@ def states_to_one_hot_locations(states: List[List[rubiks_generator.CubieRepresen
     """
     batch_size = len(states)
     states_len = len(states[0])
-    locations = t.zeros(batch_size, states_len, 8, 24 if rotations else 8, device=device)
+    locations = t.zeros(batch_size, states_len, 4, 6, device=device)
     for batch_i, example in enumerate(states):
         for state_i, state in enumerate(example):
-            data = state.inverse_positions_rotations_to_int() if rotations else state.inverse_positions_to_int() # (8, 24)
-            for cubie_id in range(8):
+            # data = state.inverse_positions_rotations_to_int() if rotations else state.inverse_positions_to_int() # (8, 24)
+            data = state.observations()
+            for cubie_id in range(locations.shape[2]):
                 cubie_location = data[cubie_id]
+                locations[batch_i, state_i, cubie_id, rubiks_generator.cube_colors.index(cubie_location)] = 1
                 # if state_i == 0:
                 #     print(cubie_id, cubie_location)
-                locations[batch_i, state_i, cubie_id, cubie_location] = 1
         # print()
     return locations
 
 # Initialize DataLoader
-dl = CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32, seed='probe2')
+dl = CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32, seed='probe2', num_workers=0)
 
 for tokens, states in dl:
     tokens = tokens.cuda()
@@ -61,24 +63,41 @@ for tokens, states in dl:
 t.cuda.empty_cache()
 
 # Initialize probe: layers (d_model -> cubie_positions cubie_positions)
-lr = 5e-4
+lr = 1e-3
 wd = 0.01
-layer = 5
+layer = 4
 # layers = model.cfg.n_layers
 cubie_positions = 8
-probe_name = "cubie_location_probe"
+probe_name = "trivial_probe"
 linear_probe = t.randn(
-    cubie_positions, cubie_positions * 3, model.cfg.d_model, requires_grad=False, device="cuda"
+    4,6, model.cfg.d_model, requires_grad=False, device="cuda"
 )/np.sqrt(model.cfg.d_model)
 linear_probe.requires_grad = True
 optimiser = t.optim.AdamW([linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd)
 # 0 = when model receives the move
-offset = 2
+offset = 0
 
 probe_loss_fn = t.nn.CrossEntropyLoss(reduction="none")
 
-n_batches = 200
+n_batches = 1000
 # wandb.init(project="othello", name="linear-probe")
+
+# %%
+
+# Make sure our sticker colors returned by state.sticker_colors_to_int() match tokens
+for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
+    if i >= n_batches: break
+
+    for i, state in enumerate(states[0]):
+        sticker_colors_to_int_values = [rubiks_generator.cube_colors[c] for c in state.sticker_colors_to_int()[0:4]]
+        print(f"Color at position 0-3: {sticker_colors_to_int_values}")
+        print(f"Tokens: {rubiks_generator.tokenizer.decode(tokens[0, 5*i+1:5*i+6].tolist())}")
+        state.show()
+
+    break
+        
+# %%
+
 # %%
 
 # Initialize DataLoader
@@ -102,6 +121,10 @@ for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
     # predicted probability of each cubie being in each location
     probe_log_probs = probe_out.log_softmax(-1) # (batch, pos, cubie_id, cubie_loc)
     states_one_hot = states_to_one_hot_locations(states).cuda() # (batch, pos, cubie_id, cubie_loc)
+    first_sequence = states[0]
+    # if i==0:
+    #     for state in first_sequence:
+    #         state.show()
     # 1 * log prob for the correct-position logits, 0 otherwise. Then reduce over batch
     probe_correct_log_probs = probe_log_probs * states_one_hot # (batch, pos, cubie_id, cubie_loc)
     average_correct_log_probs = reduce(
@@ -118,12 +141,12 @@ for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
 
     if i % 20 == 0:
         cubie_locations_integer = states_one_hot.argmax(-1)
-        accuracy = probe_log_probs.argmax(-1).eq(cubie_locations_integer).float().mean().item()
+        accuracy = list(probe_log_probs.argmax(-1).eq(cubie_locations_integer).float().mean((0, 1)).cpu().numpy())
         # wandb.log({
         #     "loss": loss.item(),
         #     "accuracy": accuracy,
         # })
-        print(f"loss={loss.item():.3f}, {accuracy=:.3f}")
+        print(f"loss={loss.item():.3f}, {accuracy=}")
 # wandb.finish()
 t.save(linear_probe, f"{probe_name}.pth")
 # %%
@@ -131,7 +154,7 @@ t.save(linear_probe, f"{probe_name}.pth")
 # test linear probe
 n_batches = 10
 accuracy = []
-loss_components = np.zeros((25, 8, 24))
+loss_components = np.zeros((25, 4, 6))
 for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
     if i >= n_batches: break
     with t.inference_mode():
@@ -157,11 +180,11 @@ for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
         ).detach().cpu().numpy()
 # %%
 # Get marginals of loss_components, and create a line graph by pos
-loss_components_by_position = reduce(loss_components, "pos cubie_id cubie_loc -> pos", "mean")
+loss_components_by_position = reduce(loss_components, "pos cubie_id cubie_loc -> pos cubie_id", "mean")
 
 px.line(
-    x=np.arange(loss_components_by_position.shape[0]),
-    y=loss_components_by_position,
+    data_frame=pd.DataFrame(loss_components_by_position),
+    # x=np.arange(loss_components_by_position.shape[0]),
     title="Loss components by position",
 )
 
