@@ -202,6 +202,7 @@ class CubePuzzleDataset(Dataset):
 class CubieRepresentation(CubePuzzle):
     def __init__(self):
         # cubie i has stickers 3i to 3i+2
+        # positions 1, 3, 5, 7 are on the top face
         self.cubie_locations = np.array(list(np.ndindex(2, 2, 2))) * 2 - 1
 
         # (0, 1, 2) means no rotation
@@ -348,7 +349,7 @@ class CubieRepresentation(CubePuzzle):
             axis = rng.integers(3)
             face = rng.choice([-1, 1])
             direction = rng.choice([-1, 1])
-            rotation_name = "U D L R F B".split()[axis * 2 + (face == -1)]
+            rotation_name = "F B R L U D".split()[axis * 2 + (face == -1)]
             if direction == -1:
                 rotation_name += "'"
             else:
@@ -435,21 +436,22 @@ def __dry_test_cube(cubeclass: type) -> None:
     for i, (data, states) in enumerate(dl):
         for pos in range(25):
             state = states[0][pos]
-            datum= data[0][pos] # uses observations
+            datum= data[0][5*pos+1:5*pos+6] # uses observations
+            datum = tokenizer.decode(list(datum))
             print(f"{i=} {datum=}")
             print(f"{state.observations()=}")
             state.show() # uses color_index_of_sticker_at
         break
 
 
-# if __name__ == "__main__":
-#     # __dry_test_cube(CubePuzzle222)
-#     # __dry_test_cube(CubePuzzle111)
-#     __dry_test_cube(CubieRepresentation)
-#     # cube = CubieRepresentation()
-#     # dl = cube.dataloader(31, batch_size=32, seed=0)
-#     # for i, (data, state) in enumerate(dl):    #     print(f"{i=} {data=}")
-#     #     break
+if __name__ == "__main__":
+    # __dry_test_cube(CubePuzzle222)
+    # __dry_test_cube(CubePuzzle111)
+    __dry_test_cube(CubieRepresentation)
+    # cube = CubieRepresentation()
+    # dl = cube.dataloader(31, batch_size=32, seed=0)
+    # for i, (data, state) in enumerate(dl):    #     print(f"{i=} {data=}")
+    #     break
 
 # %%
 
