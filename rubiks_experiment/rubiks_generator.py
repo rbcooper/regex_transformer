@@ -1,6 +1,6 @@
 # %%
 import tokenize
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch as t
@@ -44,67 +44,8 @@ class CubePuzzle:
     def apply_rotation(self, face, direction):
         pass
 
-    def observations(self) -> List[str]:
-        pass
 
-    @classmethod
-    def dataset(cls, data_length: int, seed=None) -> Dataset:
-        """A torch dataset yielding (random_word, dfa_state) pairs)"""
-        return CubePuzzleDataset(cls, data_length=data_length, seed=seed)
 
-    @classmethod
-    def dataloader(cls, data_length: int, batch_size: int, seed=None, num_workers=4) -> DataLoader:
-        def my_collate(batch):
-            data = t.stack([item[0] for item in batch])
-            cube_state = [item[1] for item in batch]
-            return data, cube_state
-
-        return DataLoader(
-            cls.dataset(data_length, seed=seed),
-            batch_size=batch_size,
-            collate_fn=my_collate,
-            num_workers=num_workers,
-        )
-
-    @classmethod
-    def generate_random_data(cls, data_length: int, seed: int) -> Tuple[list, list]:
-        """
-        Generates a sequence of (observation, rotation, observation, rotation, ...),
-        where rotations are random and observations are correct.
-        Also returns a list of full states of the cube.
-        Starts from the starting state.
-        """
-        assert isinstance(data_length, int) and data_length % 2 == 1
-        rng = np.random.default_rng(seed)
-        rotations = rng.choice(cls.rotation_names, size=data_length // 2)
-        cube = cls()
-        states = []
-        observations = []
-        for rotation in rotations:
-            cube.apply_rotation(rotation)
-            states.append(cube)
-            observations.append(cube.observations())
-
-        # interlace observations and rotations
-        data = []
-        for r, o in zip(rotations, observations):
-            data.append(r)
-            data.extend(o)
-        return data, states
-
-    @classmethod
-    def tokenize(self, data: list, prepend_eos=True):
-        """
-        Returns a tensor with interlaced observations and rotations.
-        Observations are ASCII codes for numbers 0-5, rotations are letters.
-        Also prepends the EOS token 0.
-        """
-        result = t.tensor(
-            tokenizer.encode(data, is_pretokenized=True).ids, dtype=t.int64
-        )
-        if prepend_eos:
-            result = t.cat([t.tensor([0], dtype=t.int64), result])
-        return result
 
 
 # %%
@@ -164,36 +105,6 @@ class CubePuzzle111(CubePuzzle):
         print(f" {s[1]}")
         print()
 
-
-# %%
-
-
-class CubePuzzleDataset(Dataset):
-    def __init__(
-        self,
-        group_class: type,
-        data_length: int,
-        *,
-        seed: Optional[int] = None,
-        prepend_eos: bool = True,
-    ):
-        self.group_class = group_class
-        self.data_length = data_length
-        self.seed = seed
-        self.prepend_eos = prepend_eos
-        # print(
-        #     f"dataset to generate data of length {self.data_length - self.prepend_eos}"
-        # )
-
-    def __len__(self):
-        return (2**31) - 1
-
-    def __getitem__(self, idx) -> Tuple[t.Tensor, list]:
-        data, states = self.group_class.generate_random_data(
-            self.data_length - self.prepend_eos, seed=idx
-        )
-        data = self.group_class.tokenize(data, prepend_eos=self.prepend_eos)
-        return data, states
 
 
 # %%
@@ -327,50 +238,6 @@ class CubieRepresentation(CubePuzzle):
                         ret.append(self.color_index_of_sticker_at(x,y,z,axis))
         return np.array(ret)
 
-
-
-    @classmethod
-    def generate_random_data(cls, data_length: int, seed: int) -> Tuple[list, list]:
-        """
-        For the 1x1x1 cube, generates a sequence of (observation, rotation, observation, rotation, ...),
-        where rotations are random and observations are correct.
-        Also returns a list of full states of the cube.
-        Starts from the starting state.
-        """
-        # print(f"{data_length=}")
-        assert isinstance(data_length, int) and data_length % 5 == 0
-        n_observations = data_length // 5
-        rng = np.random.default_rng(seed)
-        rotations = []  # rng.choice(cls.rotation_names, size=data_length // 5)
-        cube = cls()
-        states = []
-        observations = []
-        for i in range(n_observations):
-            axis = rng.integers(3)
-            face = rng.choice([-1, 1])
-            direction = rng.choice([-1, 1])
-            rotation_name = "F B R L U D".split()[axis * 2 + (face == -1)]
-            if direction == -1:
-                rotation_name += "'"
-            else:
-                rotation_name += " "
-            rotations.append(rotation_name)
-            cube.apply_rotation(axis, face, direction)
-            # TODO find some way to log states without breaking dataloader
-            # states.append(cube.sticker_values)
-            # observations is list of strings
-            observations.append(cube.observations())
-            states.append(deepcopy(cube))
-            # print(len(states))
-
-        # interlace observations and rotations
-        data = []
-        for r, o in zip(rotations, observations):
-            # print(f"{type(r)=}, {type(o)=}")
-            data.append(r)
-            data.extend(o)
-        return data, states  # states
-
     def show(self, do_print=True) -> str:
         # Translate the state into colors
         def c(x, y, z, axis):
@@ -418,6 +285,95 @@ class CubieRepresentation(CubePuzzle):
 
 # %%
 
+def generate_2x2x2_cube_data_free(data_length: int, rng: np.random.Generator) -> Tuple[list, list]:
+    """
+    For the 1x1x1 cube, generates a sequence of (observation, rotation, observation, rotation, ...),
+    where rotations are random and observations are correct.
+    Also returns a list of full states of the cube.
+    Starts from the starting state.
+    """
+    # print(f"{data_length=}")
+    assert isinstance(data_length, int) and data_length % 5 == 0
+    n_observations = data_length // 5
+    rotations = []  # rng.choice(cls.rotation_names, size=data_length // 5)
+    cube = CubieRepresentation()
+    states = []
+    observations = []
+    for i in range(n_observations):
+        axis = rng.integers(3)
+        face = rng.choice([-1, 1])
+        direction = rng.choice([-1, 1])
+        rotation_name = "F B R L U D".split()[axis * 2 + (face == -1)]
+        if direction == -1:
+            rotation_name += "'"
+        else:
+            rotation_name += " "
+        rotations.append(rotation_name)
+        cube.apply_rotation(axis, face, direction)
+        # TODO find some way to log states without breaking dataloader
+        # states.append(cube.sticker_values)
+        # observations is list of strings
+        observations.append(cube.observations())
+        states.append(deepcopy(cube))
+
+    # interlace observations and rotations
+    data = []
+    for r, o in zip(rotations, observations):
+        # print(f"{type(r)=}, {type(o)=}")
+        data.append(r)
+        data.extend(o)
+
+    prepend_eos = True
+    result_data = t.tensor(
+            tokenizer.encode(data, is_pretokenized=True).ids, dtype=t.int64
+        )
+    if prepend_eos:
+        result_data = t.cat([t.tensor([0], dtype=t.int64), result_data])
+    return result_data, states  # states
+
+
+def generate_2x2x2_cube_data_no_beginning_Us(shape: int, rng: np.random.Generator) -> Tuple[list, list]:
+    while True:
+        (data, state) = generate_2x2x2_cube_data_free(shape, rng=rng)
+        if 'U ' not in data[:10]:
+            return (data, state)
+            
+
+def make_dataloader(func: Callable, batch_size: int, seq_length, num_workers=4, seed=None) -> DataLoader:
+    def my_collate(batch):
+        data = t.stack([item[0] for item in batch])
+        cube_state = [item[1] for item in batch]
+        return data, cube_state
+
+    dataset = FunctionalDataset(func, shape=seq_length, seed=seed)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        collate_fn=my_collate,
+        num_workers=num_workers,
+    )
+
+class FunctionalDataset(Dataset):
+    def __init__(self, func: Callable, shape: int, seed: Optional[int]):
+        self.shape = shape
+        self.func = func
+        self.seed = seed
+
+    def __len__(self):
+        return (2**31) - 1
+
+    def __getitem__(self, idx) -> Tuple[t.Tensor, list]:
+        seed = idx + 6327623784329 * self.seed if self.seed else None
+        rng = np.random.default_rng(seed=seed)
+        return self.func(self.shape, rng)
+
+
+
+
+
+
+# %%
+
 
 def __dry_test_cube(cubeclass: type) -> None:
     print(f"Dry running {cubeclass}")
@@ -432,7 +388,7 @@ def __dry_test_cube(cubeclass: type) -> None:
     # print(f"{cubeclass.tokenize(data)=}")
     # ds = cubeclass.dataset(11, seed=0)
     # print(f"{ds[0]=}")
-    dl = cubeclass.dataloader(126, batch_size=3, seed=0, num_workers=0)
+    dl = make_dataloader(generate_2x2x2_cube_data_free, batch_size=50, seq_length=125)
     for i, (data, states) in enumerate(dl):
         for pos in range(25):
             state = states[0][pos]
