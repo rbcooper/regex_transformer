@@ -43,6 +43,7 @@ refresh()
 device = "cuda"
 # %% unused
 
+
 # reference_model = HookedTransformer.from_pretrained("gelu-4l", fold_ln=False, center_unembed=False, center_writing_weights=False)
 # %% Make model
 
@@ -167,6 +168,7 @@ def train_basic_model(
         parameter_size = (
             n_parameters * model.parameters().__next__().element_size() / 1e6
         )
+        print(f"Training with config: \n{cfg}")
         print(f"Model has {n_parameters} parameters = {parameter_size} MB")
 
         """## Model Training"""
@@ -193,7 +195,7 @@ def train_basic_model(
                 print(f"Epoch {epoch}: {loss.item()} {this_color_loss=}")
             if save_every is not None and epoch % save_every == 0:
                 timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-                model_file_name = f"checkpoint_rubiks_{cfg.n_layers}l_{cfg.d_model}d_{cfg.n_ctx}c_{epoch}_{timestamp}.pt"
+                model_file_name = f"models/checkpoint_rubiks_{cfg.n_layers}l_{cfg.d_model}d_{cfg.n_ctx}c_{epoch}_{timestamp}.pt"
                 t.save(model.state_dict(), model_file_name)
             run.log(log_dict)
             if epoch > num_epochs:
@@ -206,17 +208,17 @@ if __name__ == "__main__":
     train = True
 
     timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-    model_file_name = f"model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}.pt"
+    model_file_name = f"models/model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}.pt"
 
     if train:
         losses = train_basic_model(
-            model, batch_size=128, num_epochs=100_000, seed=123, save_every=10000
+            model, batch_size=32, num_epochs=200_000, seed=123, save_every=10000
         )
         fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
         fig.show()
         t.save(model.state_dict(), model_file_name)
     else:
-        model_file_name = "/home/ubuntu/regex_transformer/rubiks_experiment/checkpoint_rubiks_6l_256d_126c_300000_2023_06_27-11_08_17_PM.pt"
+        model_file_name = "/home/ubuntu/regex_transformer/rubiks_experiment/models/checkpoint_rubiks_6l_256d_126c_300000_2023_06_27-11_08_17_PM.pt"
         model.load_state_dict(t.load(model_file_name))
 # %%
 
