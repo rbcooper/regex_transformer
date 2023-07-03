@@ -3,15 +3,15 @@ Experiment training a model on the Rubiks cube dataset
 """
 # %%
 import random
+from datetime import datetime
 
 from importlib import reload
 from typing import List, Optional
-from datetime import datetime
-from frozendict import frozendict
 
 import circuitsvis
 import numpy as np
 import plotly.express as px
+import rubiks_generator
 
 import torch as t
 import tqdm
@@ -20,15 +20,14 @@ import transformer_lens
 
 import wandb
 from automata.fa.dfa import DFA
-import rubiks_generator
+
 # from rubiks_generator import CubePuzzle111, CubieRepresentation
 from einops import rearrange, reduce, repeat
+from frozendict import frozendict
 from IPython.display import display
 
 from sklearn.linear_model import LogisticRegression
-import transformer_lens
 from transformer_lens import HookedTransformer
-
 
 
 # %% refresh(), device, etc.
@@ -36,6 +35,7 @@ from transformer_lens import HookedTransformer
 
 def refresh():
     reload(rubiks_generator)
+
 
 refresh()
 
@@ -100,8 +100,6 @@ base_transformer_config = frozendict(
 # }
 
 
-
-
 cfg = transformer_lens.HookedTransformerConfig(**base_transformer_config)
 
 cfg.n_params
@@ -120,6 +118,7 @@ def loss_fn(logits, tokens, return_per_token=False):
     correct_log_probs = log_probs.gather(-1, tokens[..., None])[..., 0]
     loss = -correct_log_probs.mean()  # mean over batch and pos
     return loss
+
 
 def color_loss(logits, tokens):
     logits = logits.clone()[:, :-1]  # ignore last logit
@@ -142,13 +141,15 @@ def color_loss(logits, tokens):
 
 model = HookedTransformer(cfg)
 
+
 # %% train model function
 def train_basic_model(
     model, batch_size=64, num_epochs=10_000, seed=123, save_every=None
 ):
     project_name = f"rubiks-world-representation"
-    with wandb.init(project=project_name, entity="alighnment", job_type="train",mode='offline') as run:
-        
+    with wandb.init(
+        project=project_name, entity="alighnment", job_type="train", mode="offline"
+    ) as run:
         print(f"Batch size: {batch_size}")
         lr = 1e-4
         betas = (0.9, 0.95)
@@ -160,7 +161,12 @@ def train_basic_model(
         scheduler = t.optim.lr_scheduler.LambdaLR(
             optimizer, lambda i: min(i / 100, 1.0)
         )
-        data_loader = rubiks_generator.make_dataloader(rubiks_generator.generate_2x2x2_cube_data_free, batch_size=batch_size, seq_length=cfg.n_ctx - 1, num_workers=8)
+        data_loader = rubiks_generator.make_dataloader(
+            rubiks_generator.generate_2x2x2_cube_data_free,
+            batch_size=batch_size,
+            seq_length=cfg.n_ctx - 1,
+            num_workers=8,
+        )
 
         n_parameters = sum(p.numel() for p in model.parameters())
         parameter_size = (
@@ -172,7 +178,9 @@ def train_basic_model(
         """## Model Training"""
         model.train()
         losses = []
-        for epoch, (tokens, states) in tqdm.auto.tqdm(enumerate(data_loader), total=num_epochs):
+        for epoch, (tokens, states) in tqdm.auto.tqdm(
+            enumerate(data_loader), total=num_epochs
+        ):
             # print(tokens)
             tokens = tokens.cuda()
             logits = model(tokens)
@@ -200,13 +208,16 @@ def train_basic_model(
                 break
         return losses
 
-# %% train model 
+
+# %% train model
 
 if __name__ == "__main__":
     train = True
 
     timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-    model_file_name = f"models/model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}.pt"
+    model_file_name = (
+        f"models/model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}.pt"
+    )
 
     if train:
         losses = train_basic_model(
@@ -240,7 +251,7 @@ if __name__ == "__main__":
 
 # Profile model
 tokens = tokens.clone()
-from torch.profiler import profile, record_function, ProfilerActivity
+from torch.profiler import profile, ProfilerActivity, record_function
 
 
 with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
