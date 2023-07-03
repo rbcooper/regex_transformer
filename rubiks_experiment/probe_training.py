@@ -10,6 +10,7 @@ from transformer_lens import HookedTransformer
 import tqdm
 from typing import List
 import wandb
+from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
@@ -22,11 +23,33 @@ cfg = tl.HookedTransformerConfig(**base_transformer_config)
 model = HookedTransformer(cfg).to(device)
 # %% Load data
 
-model_file_name = "checkpoint_rubiks_6l_256d_126c_50000_2023_06_29-09_23_38_PM.pt"
+model_file_name = "models/checkpoint_rubiks_6l_256d_126c_50000_2023_06_29-09_23_38_PM.pt"
 model.load_state_dict(t.load(model_file_name))
 
 # %%
+t.cuda.empty_cache()
 
+# Initialize probe: layers (d_model -> cubie_positions cubie_positions)
+lr = 1e-3
+wd = 0.01
+layer = 4
+n_colors = 6
+# layers = model.cfg.n_layers
+n_cubie_positions = 24
+probe_name = "nonlinear_probe"
+linear_probe = t.randn(
+    n_cubie_positions,n_colors, model.cfg.d_model, requires_grad=False, device="cuda"
+)/np.sqrt(model.cfg.d_model)
+linear_probe.requires_grad = True
+optimiser = t.optim.AdamW([linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd)
+# 0 = when model receives the move
+offset = 1
+
+probe_loss_fn = t.nn.CrossEntropyLoss(reduction="none")
+
+n_batches = 1000
+# wandb.init(project="othello", name="linear-probe")
+# %%
 def states_to_one_hot_locations(states: List[List[rubiks_generator.CubieRepresentation]], rotations=True) -> t.Tensor:
     """
     states_len = (seq_len - 1) / 5
@@ -35,72 +58,47 @@ def states_to_one_hot_locations(states: List[List[rubiks_generator.CubieRepresen
     """
     batch_size = len(states)
     states_len = len(states[0])
-    locations = t.zeros(batch_size, states_len, 4, 6, device=device)
+    locations = t.zeros(batch_size, states_len, n_cubie_positions, n_colors, device=device)
     for batch_i, example in enumerate(states):
         for state_i, state in enumerate(example):
             # data = state.inverse_positions_rotations_to_int() if rotations else state.inverse_positions_to_int() # (8, 24)
-            data = state.observations()
-            for cubie_id in range(locations.shape[2]):
+            data = state.sticker_colors_to_int()
+            for cubie_id in range(n_cubie_positions):
                 cubie_location = data[cubie_id]
-                locations[batch_i, state_i, cubie_id, rubiks_generator.cube_colors.index(cubie_location)] = 1
+                locations[batch_i, state_i, cubie_id, cubie_location] = 1
                 # if state_i == 0:
                 #     print(cubie_id, cubie_location)
         # print()
     return locations
 
-# Initialize DataLoader
-dl = CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32, seed='probe2', num_workers=0)
+# Test initializing DataLoader and getting one hot states
+# dl = CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32, seed='probe2', num_workers=4)
 
-for tokens, states in dl:
-    tokens = tokens.cuda()
-    states = states_to_one_hot_locations(states).cuda()
-    print(tokens.shape, states.shape)
-    break
-
-
+# for tokens, states in dl:
+#     tokens = tokens.cuda()
+#     states = states_to_one_hot_locations(states).cuda()
+#     print(tokens.shape, states.shape)
+#     break
 # %%
 
-t.cuda.empty_cache()
+# # Make sure our sticker colors returned by state.sticker_colors_to_int() match tokens
+# for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
+#     if i >= n_batches: break
 
-# Initialize probe: layers (d_model -> cubie_positions cubie_positions)
-lr = 1e-3
-wd = 0.01
-layer = 4
-# layers = model.cfg.n_layers
-cubie_positions = 8
-probe_name = "trivial_probe"
-linear_probe = t.randn(
-    4,6, model.cfg.d_model, requires_grad=False, device="cuda"
-)/np.sqrt(model.cfg.d_model)
-linear_probe.requires_grad = True
-optimiser = t.optim.AdamW([linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd)
-# 0 = when model receives the move
-offset = 0
+#     for i, state in enumerate(states[0]):
+#         # Top face is positions 5, 11, 17, 23
+#         sticker_colors_to_int_values = [rubiks_generator.cube_colors[c] for c in state.sticker_colors_to_int()[5::6]]
+#         print(f"Color at position 5, 11, 17, 23: {sticker_colors_to_int_values}")
+#         print(f"Tokens: {rubiks_generator.tokenizer.decode(tokens[0, 5*i+1:5*i+6].tolist())}")
+#         state.show()
 
-probe_loss_fn = t.nn.CrossEntropyLoss(reduction="none")
-
-n_batches = 1000
-# wandb.init(project="othello", name="linear-probe")
-
-# %%
-
-# Make sure our sticker colors returned by state.sticker_colors_to_int() match tokens
-for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
-    if i >= n_batches: break
-
-    for i, state in enumerate(states[0]):
-        sticker_colors_to_int_values = [rubiks_generator.cube_colors[c] for c in state.sticker_colors_to_int()[0:4]]
-        print(f"Color at position 0-3: {sticker_colors_to_int_values}")
-        print(f"Tokens: {rubiks_generator.tokenizer.decode(tokens[0, 5*i+1:5*i+6].tolist())}")
-        state.show()
-
-    break
+#     break
         
 # %%
 
 # %%
 
-# Initialize DataLoader
+# Initialize DataLoader and train linear probe
 dl = CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32, seed='probe')
 for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
     if i >= n_batches: break
@@ -131,7 +129,7 @@ for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
         probe_correct_log_probs,
         "batch pos cubie_id cubie_loc -> cubie_id",
         "mean"
-    ) * cubie_positions # Take the *mean* over batch, pos and *sum* over cubie locations
+    ) * n_cubie_positions # Take the *mean* over batch, pos and *sum* over cubie locations
     loss = -average_correct_log_probs.sum() # sum over cubie_id
     
     loss.backward() # it's important to do a single backward pass for mysterious PyTorch reasons, so we add up the losses - it's per mode and per square.
@@ -213,4 +211,34 @@ px.imshow(
 # probe_predictions = probe_log_probs.argmax(-1)[:, 0, 1] # (batch, pos 0, cubie_id 0)
 # # Get frequency of predictions at position 0
 # px.histogram(probe_predictions.cpu().numpy(), title="Predictions at position 0")
+# %%
+
+fig = make_subplots(rows=2, cols=3)
+for layer in range(model.cfg.n_layers):
+    ### Attention patterns
+    cache['attn_scores', 4].shape # (batch, n_heads, pos, pos)
+
+    # Heatmap of average attention patterns over all heads
+    attn_scores_by_pos = reduce(cache['attn_scores', layer].cpu().numpy(), "batch n_heads pos_from pos_to -> pos_from pos_to", "mean")
+    # Set minimum to nan
+    # mask = 
+    attn_scores_by_pos = np.maximum(attn_scores_by_pos, -10)
+    attn_scores_by_pos = attn_scores_by_pos[:20,:20]
+    # Now take mean over all offsets mod 5, to get a 5x5 heatmap
+    # Here, offset 0 is when observations are predicted
+    # attn_scores_by_pos_mod_5 = rearrange(attn_scores_by_pos[1:121, 1:121], "(block_f ofs_f) (block_to ofs_to) -> block_f ofs_f block_to ofs_to", ofs_f=5, ofs_to=5)
+    # attn_scores_by_pos_mod_5 = reduce(attn_scores_by_pos_mod_5, "block_f ofs_f block_to ofs_to -> ofs_f ofs_to", "mean")
+    fig.add_trace(
+        trace=px.imshow(
+            attn_scores_by_pos,
+            title=f"Average attention patterns over all heads in layer {layer}",
+            labels=dict(x="pos_to", y="pos_from"),
+            range_color=[-5, 10],
+            ).data[0],
+        row=layer//3+1, col=layer%3+1,)
+
+    fig.update_coloraxes
+    
+# show plot
+fig.show()
 # %%
