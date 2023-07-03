@@ -160,9 +160,7 @@ def train_basic_model(
         scheduler = t.optim.lr_scheduler.LambdaLR(
             optimizer, lambda i: min(i / 100, 1.0)
         )
-        data_loader = rubiks_generator.CubieRepresentation.dataloader(
-            data_length=cfg.n_ctx, batch_size=batch_size, seed=seed, num_workers=8
-        )
+        data_loader = rubiks_generator.make_dataloader(rubiks_generator.generate_2x2x2_cube_data_free, batch_size=batch_size, seq_length=cfg.n_ctx - 1, num_workers=8)
 
         n_parameters = sum(p.numel() for p in model.parameters())
         parameter_size = (
