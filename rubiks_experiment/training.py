@@ -141,14 +141,12 @@ def color_loss(logits, tokens):
 
 model = HookedTransformer(cfg)
 
-
-
 # %% train model function
 def train_basic_model(
     model, batch_size=64, num_epochs=10_000, seed=123, save_every=None
 ):
     project_name = f"rubiks-world-representation"
-    with wandb.init(project=project_name, entity="alighnment", job_type="train") as run:
+    with wandb.init(project=project_name, entity="alighnment", job_type="train",mode='offline') as run:
         
         print(f"Batch size: {batch_size}")
         lr = 1e-4
@@ -162,7 +160,7 @@ def train_basic_model(
             optimizer, lambda i: min(i / 100, 1.0)
         )
         data_loader = rubiks_generator.CubieRepresentation.dataloader(
-            data_length=cfg.n_ctx, batch_size=batch_size, seed=seed
+            data_length=cfg.n_ctx, batch_size=batch_size, seed=seed, num_workers=8
         )
 
         n_parameters = sum(p.numel() for p in model.parameters())
@@ -212,7 +210,7 @@ if __name__ == "__main__":
 
     if train:
         losses = train_basic_model(
-            model, batch_size=32, num_epochs=100_000, seed=123, save_every=10000
+            model, batch_size=128, num_epochs=100_000, seed=123, save_every=10000
         )
         fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
         fig.show()
@@ -238,4 +236,17 @@ if __name__ == "__main__":
             s = rubiks_generator.tokenizer.decode(most_likely_tokens)
             print(s)
             break
+# %%
+
+# Profile model
+tokens = tokens.clone()
+from torch.profiler import profile, record_function, ProfilerActivity
+
+
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+    model(tokens)
+
+output = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10)
+print(output)
+prof.export_chrome_trace("trace.json")
 # %%
