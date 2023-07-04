@@ -6,7 +6,7 @@ import random
 from datetime import datetime
 
 from importlib import reload
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import circuitsvis
 import numpy as np
@@ -140,16 +140,20 @@ def color_loss(logits, tokens):
 # aa_test = make_aa_generator(seed=456)
 
 model = HookedTransformer(cfg)
+model.tokenizer = rubiks_generator.tokenizer
 
 
 # %% train model function
 def train_basic_model(
-    model, batch_size=64, num_epochs=10_000, seed=123, save_every=None
+    model,
+    batch_size=64,
+    num_epochs=10_000,
+    seed=123,
+    save_every=None,
+    data_generator=rubiks_generator.generate_2x2x2_cube_data_free,
 ):
     project_name = f"rubiks-world-representation"
-    with wandb.init(
-        project=project_name, entity="alighnment", job_type="train", mode="offline"
-    ) as run:
+    with wandb.init(project=project_name, entity="alighnment", job_type="train") as run:
         print(f"Batch size: {batch_size}")
         lr = 1e-4
         betas = (0.9, 0.95)
@@ -162,10 +166,11 @@ def train_basic_model(
             optimizer, lambda i: min(i / 100, 1.0)
         )
         data_loader = rubiks_generator.make_dataloader(
-            rubiks_generator.generate_2x2x2_cube_data_free,
+            data_generator,
             batch_size=batch_size,
             seq_length=cfg.n_ctx - 1,
             num_workers=8,
+            seed=0,
         )
 
         n_parameters = sum(p.numel() for p in model.parameters())
@@ -199,7 +204,7 @@ def train_basic_model(
                 this_color_loss = color_loss(logits, tokens)
                 log_dict["color_loss"] = this_color_loss.item()
                 print(f"Epoch {epoch}: {loss.item()} {this_color_loss=}")
-            if save_every is not None and epoch % save_every == 0:
+            if save_every is not None and epoch % save_every == 0 and epoch > 0:
                 timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
                 model_file_name = f"models/checkpoint_rubiks_{cfg.n_layers}l_{cfg.d_model}d_{cfg.n_ctx}c_{epoch}_{timestamp}.pt"
                 t.save(model.state_dict(), model_file_name)
@@ -211,42 +216,69 @@ def train_basic_model(
 
 # %% train model
 
+experiment_name = "no_us_first_10"
+
+
+def generate_2x2x2_cube_data_no_beginning_Us(
+    shape: int, rng: np.random.Generator
+) -> Tuple[list, list]:
+    while True:
+        (data, state) = rubiks_generator.generate_2x2x2_cube_data_free(shape, rng=rng)
+        if rubiks_generator.tokenizer.token_to_id("U ") not in data[:10]:
+            return (data, state)
+
+
+# %%
+
+train_data_generator = generate_2x2x2_cube_data_no_beginning_Us
+
 if __name__ == "__main__":
-    train = True
+    train = False
 
     timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-    model_file_name = (
-        f"models/model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}.pt"
-    )
+    model_file_name = f"models/model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}_{experiment_name}.pt"
 
     if train:
         losses = train_basic_model(
-            model, batch_size=32, num_epochs=200_000, seed=123, save_every=10000
+            model,
+            batch_size=32,
+            num_epochs=200_000,
+            seed=123,
+            save_every=10000,
+            data_generator=train_data_generator,
         )
         fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
-        fig.show()
+        # fig.show()
         t.save(model.state_dict(), model_file_name)
     else:
-        model_file_name = "/home/ubuntu/regex_transformer/rubiks_experiment/models/checkpoint_rubiks_6l_256d_126c_300000_2023_06_27-11_08_17_PM.pt"
+        model_file_name = "/home/ubuntu/regex_transformer/rubiks_experiment/models/model_weights_rubiks_6l_256_2023_07_03-03_24_52_PM_no_us_first_10.pt"
         model.load_state_dict(t.load(model_file_name))
 # %%
 
+test_data_generator = rubiks_generator.generate_2x2x2_cube_data_free
 if __name__ == "__main__":
     with t.inference_mode():
         model.eval()
-        dl = rubiks_generator.CubieRepresentation.dataloader(cfg.n_ctx, batch_size=32)
-
-        for tokens, states in dl:
+        dl = rubiks_generator.make_dataloader(
+            test_data_generator,
+            batch_size=32,
+            seq_length=cfg.n_ctx - 1,
+            num_workers=8,
+            seed=123,
+        )
+        for i, (tokens, states) in enumerate(dl):
             tokens = tokens.cuda()
             print(tokens.shape)
-            print(rubiks_generator.tokenizer.decode(list(tokens[0])))
+            actual = rubiks_generator.tokenizer.decode(list(tokens[0]))
+            print(f"actual:{actual}")
             logits = model(tokens)
             this_color_loss = color_loss(logits, tokens).item()
             print(f"{this_color_loss=:.3f}")
             most_likely_tokens = list(logits.argmax(-1)[0])
             s = rubiks_generator.tokenizer.decode(most_likely_tokens)
-            print(s)
-            break
+            print(f"predicted:  {s}")
+            if i > 20:
+                break
 # %%
 
 # Profile model
@@ -260,4 +292,68 @@ with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
 output = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10)
 print(output)
 prof.export_chrome_trace("trace.json")
+# %%
+
+
+# %%
+
+# %%
+
+# # Test with missing various first letters
+
+train_data_generator = generate_2x2x2_cube_data_no_beginning_Us
+
+simple_moves = (m for m in rubiks_generator.all_moves if "2" not in m and "'" not in m)
+
+
+def train_biased_model(
+    moves=simple_moves,
+    start_filter_length=1,
+    base_generator=rubiks_generator.generate_2x2x2_cube_data_free,
+):
+    moves_to_filtered_model = {}
+    seed = 783248792
+    for move in moves:
+        move_id = rubiks_generator.tokenizer.token_to_id(move)
+        print(f"Training model with first {start_filter_length} {move}s missing")
+
+        def train_data_generator_biased(
+            shape: int, rng: np.random.Generator
+        ) -> Tuple[list, list]:
+            while True:
+                (data, state) = base_generator(shape, rng=rng)
+                if move_id not in data[start_filter_length:]:
+                    return (data, state)
+
+        model = HookedTransformer(cfg)
+        model.tokenizer = rubiks_generator.tokenizer
+        timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
+        move_nice = move.replace(" ", "").replace("'", "p")
+        model_file_name = f"models/model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}_filterdfirst_{start_filter_length}_{move_nice}.pt"
+        num_epochs = 20_000
+        losses = train_basic_model(
+            model,
+            batch_size=32,
+            num_epochs=num_epochs,
+            seed=seed,
+            save_every=10000,
+            data_generator=train_data_generator_biased,
+        )
+        fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
+        # fig.show()
+        print(f"saving {model_file_name}")
+        t.save(model.state_dict(), model_file_name)
+        moves_to_filtered_model[move] = model
+    model_dict_to_save = {a: m.state_dict() for a, m in moves_to_filtered_model.items()}
+    t.save(
+        model_dict_to_save,
+        f"models/dict_model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}_filterdfirst_{start_filter_length}_all_epoch_{num_epochs}.pt",
+    )
+    return moves_to_filtered_model
+
+
+if __name__ == "__main__":
+    train = True
+    if train:
+        move_to_trained_filtered = train_biased_model(start_filter_length=1)
 # %%

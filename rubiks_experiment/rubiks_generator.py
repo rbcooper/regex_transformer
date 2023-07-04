@@ -330,13 +330,6 @@ def generate_2x2x2_cube_data_free(data_length: int, rng: np.random.Generator) ->
     if prepend_eos:
         result_data = t.cat([t.tensor([0], dtype=t.int64), result_data])
     return result_data, states  # states
-
-
-def generate_2x2x2_cube_data_no_beginning_Us(shape: int, rng: np.random.Generator) -> Tuple[list, list]:
-    while True:
-        (data, state) = generate_2x2x2_cube_data_free(shape, rng=rng)
-        if 'U ' not in data[:10]:
-            return (data, state)
             
 
 def make_dataloader(func: Callable, batch_size: int, seq_length, num_workers=4, seed=None) -> DataLoader:
