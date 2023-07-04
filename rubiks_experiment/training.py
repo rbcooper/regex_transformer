@@ -150,7 +150,7 @@ def train_basic_model(
     num_epochs=10_000,
     seed=123,
     save_every=None,
-    data_generator=rubiks_generator.generate_2x2x2_cube_data_free,
+    data_generator=rubiks_generator.generate_2x2x2_cube_up_free,
 ):
     project_name = f"rubiks-world-representation"
     with wandb.init(project=project_name, entity="alighnment", job_type="train") as run:
@@ -223,7 +223,9 @@ def generate_2x2x2_cube_data_no_beginning_Us(
     shape: int, rng: np.random.Generator
 ) -> Tuple[list, list]:
     while True:
-        (data, state) = rubiks_generator.generate_2x2x2_cube_data_free(shape, rng=rng)
+        (data, state) = rubiks_generator.generate_2x2x2_cube_up_free(
+            shape, rng=rng
+        )
         if rubiks_generator.tokenizer.token_to_id("U ") not in data[:10]:
             return (data, state)
 
@@ -255,7 +257,7 @@ if __name__ == "__main__":
         model.load_state_dict(t.load(model_file_name))
 # %%
 
-test_data_generator = rubiks_generator.generate_2x2x2_cube_data_free
+test_data_generator = rubiks_generator.generate_2x2x2_cube_up_free
 if __name__ == "__main__":
     with t.inference_mode():
         model.eval()
@@ -282,16 +284,16 @@ if __name__ == "__main__":
 # %%
 
 # Profile model
-tokens = tokens.clone()
-from torch.profiler import profile, ProfilerActivity, record_function
+# tokens = tokens.clone()
+# from torch.profiler import profile, ProfilerActivity, record_function
 
 
-with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-    model(tokens)
+# with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+#     model(tokens)
 
-output = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10)
-print(output)
-prof.export_chrome_trace("trace.json")
+# output = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10)
+# print(output)
+# prof.export_chrome_trace("trace.json")
 # %%
 
 
@@ -305,11 +307,14 @@ train_data_generator = generate_2x2x2_cube_data_no_beginning_Us
 
 simple_moves = (m for m in rubiks_generator.all_moves if "2" not in m and "'" not in m)
 
+# Biased data sets
+filtered_1_biased_datasets = {}
+
 
 def train_biased_model(
     moves=simple_moves,
     start_filter_length=1,
-    base_generator=rubiks_generator.generate_2x2x2_cube_data_free,
+    base_generator=rubiks_generator.generate_2x2x2_cube_up_free,
 ):
     moves_to_filtered_model = {}
     seed = 783248792
@@ -322,7 +327,7 @@ def train_biased_model(
         ) -> Tuple[list, list]:
             while True:
                 (data, state) = base_generator(shape, rng=rng)
-                if move_id not in data[start_filter_length:]:
+                if move_id not in data[: start_filter_length + 1]:
                     return (data, state)
 
         model = HookedTransformer(cfg)
@@ -353,7 +358,9 @@ def train_biased_model(
 
 
 if __name__ == "__main__":
-    train = True
+    train = False
     if train:
         move_to_trained_filtered = train_biased_model(start_filter_length=1)
+    else:
+        "models/dict_model_weights_rubiks_6l_256_2023_07_04-12_02_27_PM_filterdfirst_1_all_epoch_20000.pt"
 # %%

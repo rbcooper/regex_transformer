@@ -1,27 +1,37 @@
 # %%
 import tokenize
+from copy import deepcopy
 from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch as t
 
+from einops import rearrange, repeat
+
 from tokenizers import AddedToken, models, Tokenizer
 from torch.utils.data import DataLoader, Dataset
-from copy import deepcopy
-
-from einops import rearrange, repeat
 
 
 cube_colors = "⬜🟨🟩🟦🟥🟧"
-basic_moves = "UDLRFB"
+# Warning: the "U " token e.g. has a space at the end (so all move tokens are the same width.  Which may be dumb but whatever)
+_base_moves = "UDLRFB"
 
 all_moves = []
-for m in basic_moves:
+for m in _base_moves:
     all_moves.append(f"{m} ")
     all_moves.append(f"{m}'")
     all_moves.append(f"{m}2")
 
-vocab = [*cube_colors, *all_moves]
+non_double_moves = [m for m in all_moves if "2" not in m]
+
+corner_sticker_positions_tokens = []
+for x in "-+":
+    for y in "-+":
+        for z in "-+":
+            for axis in "xyz":
+                corner_sticker_positions_tokens.append(f"{x}{y}{z}{axis}")
+
+vocab = [*cube_colors, *all_moves, *corner_sticker_positions_tokens]
 
 tokenizer = Tokenizer(models.Unigram())
 
@@ -45,9 +55,6 @@ class CubePuzzle:
         pass
 
 
-
-
-
 # %%
 
 
@@ -55,7 +62,7 @@ class CubePuzzle111(CubePuzzle):
     # List of sticker values, in order (up, down, left, right, front, back)
     sticker_values: tuple
 
-    rotation_names = [s + ' ' for s in "U D L R F B".split()]
+    rotation_names = [s + " " for s in "U D L R F B".split()]
     # Permutations corresponding to each rotation.
     # Rotations are named by the face they rotate clockwise.
     # e.g. U takes u -> u, d -> d, l -> b, r -> f, f -> l, b -> r
@@ -106,7 +113,6 @@ class CubePuzzle111(CubePuzzle):
         print()
 
 
-
 # %%
 
 
@@ -129,10 +135,10 @@ class CubieRepresentation(CubePuzzle):
                 )
         # print(self.sticker_colors)
 
-    def apply_rotation(self, rotation: str):
+    def after_move(self, rotation: str):
         raise NotImplementedError
 
-    def apply_rotation(self, axis, face, direction):
+    def after_rotation(self, axis, face, direction) -> "CubieRepresentation":
         """
         axis is 0, 1, or 2
         face is -1 or 1
@@ -143,21 +149,49 @@ class CubieRepresentation(CubePuzzle):
         rotation_matrix[axis, axis] = 1
         rotation_matrix[(axis + 1) % 3, (axis + 2) % 3] = direction * face
         rotation_matrix[(axis + 2) % 3, (axis + 1) % 3] = -direction * face
+        cube = self.copy()
 
         for i in range(len(self.cubie_locations)):
             if self.cubie_locations[i][axis] == face:
-                self.cubie_locations[i] = rotation_matrix @ self.cubie_locations[i]
+                cube.cubie_locations[i] = rotation_matrix @ self.cubie_locations[i]
         # fix cubie rotations
         for i in range(len(self.cubie_rotations)):
-            if self.cubie_locations[i, axis] == face:
+            if cube.cubie_locations[i, axis] == face:
                 # when rotating a face, the two stickers NOT on that face swap
                 (
-                    self.cubie_rotations[i, (axis + 1) % 3],
-                    self.cubie_rotations[i, (axis + 2) % 3],
+                    cube.cubie_rotations[i, (axis + 1) % 3],
+                    cube.cubie_rotations[i, (axis + 2) % 3],
                 ) = (
                     self.cubie_rotations[i, (axis + 2) % 3],
                     self.cubie_rotations[i, (axis + 1) % 3],
                 )
+        return cube
+    
+    def apply_rotation(self, face, direction) -> None:
+        cube = self.after_rotation(face=face, direction=direction)
+        self.cubie_locations = cube.cubie_locations
+        self.cubie_rotations = cube.cubie_rotations
+
+    def corner_sticker_position_token_to_tuple(
+        self, sticker_token: str
+    ) -> Tuple[int, int, int, int]:
+        """
+
+        >>> corner_sticker_position_token_to_tuple("++-z")
+        (1, 1, -1, 2)
+        """
+        decode_dict = {"+": 1, "-": -1, "x": 0, "y": 1, "z": 2}
+        if any(c not in decode_dict for c in sticker_token):
+            raise ValueError(f"Invalid sticker token {sticker_token}")
+        return tuple(decode_dict[c] for c in sticker_token)
+
+    def color_of_sticker_position(self, sticker_token: str) -> str:
+        """Returns the emoji corresponding to the color of the sticker"""
+
+        color_index = self.color_index_of_sticker_at(
+            *self.corner_sticker_position_token_to_tuple(sticker_token)
+        )
+        return cube_colors[color_index]
 
     def get_cubie_id_of_piece_at(self, x, y, z):
         for a in [x, y, z]:
@@ -184,7 +218,11 @@ class CubieRepresentation(CubePuzzle):
         #         ret[cubie_location] = cube_colors[self.sticker_colors[z_sticker]]
 
         for i in range(len(ret)):
-            ret[i] = cube_colors[self.color_index_of_sticker_at(2 * (i // 2) - 1, 2 * (i % 2) - 1, 1, axis=2)]
+            ret[i] = cube_colors[
+                self.color_index_of_sticker_at(
+                    2 * (i // 2) - 1, 2 * (i % 2) - 1, 1, axis=2
+                )
+            ]
         # print(f"observations={ret}")
         # for i in range(len(ret)):
         #     print(cube_colors[
@@ -229,13 +267,13 @@ class CubieRepresentation(CubePuzzle):
         return inverse_positions * 3 + rotations
 
     def sticker_colors_to_int(self) -> np.ndarray:
-        # Returns a 24-element list of this cube's sticker colors.
+        # Returns a 24-element list of this cube's sticker colors, one for each position.
         ret = []
-        for x in range(-1,2,2):
-            for y in range(-1,2,2):
-                for z in range(-1,2,2):
+        for x in range(-1, 2, 2):
+            for y in range(-1, 2, 2):
+                for z in range(-1, 2, 2):
                     for axis in range(3):
-                        ret.append(self.color_index_of_sticker_at(x,y,z,axis))
+                        ret.append(self.color_index_of_sticker_at(x, y, z, axis))
         return np.array(ret)
 
     def show(self, do_print=True) -> str:
@@ -285,7 +323,10 @@ class CubieRepresentation(CubePuzzle):
 
 # %%
 
-def generate_2x2x2_cube_data_free(data_length: int, rng: np.random.Generator) -> Tuple[list, list]:
+
+def generate_2x2x2_cube_up_free(
+    data_length: int, rng: np.random.Generator
+) -> Tuple[list, list]:
     """
     For the 1x1x1 cube, generates a sequence of (observation, rotation, observation, rotation, ...),
     where rotations are random and observations are correct.
@@ -325,14 +366,42 @@ def generate_2x2x2_cube_data_free(data_length: int, rng: np.random.Generator) ->
 
     prepend_eos = True
     result_data = t.tensor(
-            tokenizer.encode(data, is_pretokenized=True).ids, dtype=t.int64
-        )
+        tokenizer.encode(data, is_pretokenized=True).ids, dtype=t.int64
+    )
     if prepend_eos:
         result_data = t.cat([t.tensor([0], dtype=t.int64), result_data])
     return result_data, states  # states
-            
 
-def make_dataloader(func: Callable, batch_size: int, seq_length, num_workers=4, seed=None) -> DataLoader:
+
+def generate_2x2x2_move_query_color(
+    data_length: int,
+    rng: np.random.Generator,
+    move_prob: float = 0.5,
+    moves=non_double_moves,
+) -> Tuple[list, list]:
+    # Remember EOS
+    tokens = []
+    states = []
+    state = CubieRepresentation()
+    while len(tokens) < data_length:
+        if rng.random() < move_prob:
+            move = rng.choice(non_double_moves)
+            tokens.append(move_prob)
+            states.append(state)
+            state = state.after_move(move)
+        else:
+            query = rng.choice(corner_sticker_positions_tokens)
+            color = state.color_of_sticker_position(query)
+            tokens.append(query)
+            states.append(state)
+            tokens.append(color)
+            states.append(state)
+    return tokens, states
+
+
+def make_dataloader(
+    func: Callable, batch_size: int, seq_length, num_workers=4, seed=None
+) -> DataLoader:
     def my_collate(batch):
         data = t.stack([item[0] for item in batch])
         cube_state = [item[1] for item in batch]
@@ -345,6 +414,7 @@ def make_dataloader(func: Callable, batch_size: int, seq_length, num_workers=4, 
         collate_fn=my_collate,
         num_workers=num_workers,
     )
+
 
 class FunctionalDataset(Dataset):
     def __init__(self, func: Callable, shape: int, seed: Optional[int]):
@@ -359,10 +429,6 @@ class FunctionalDataset(Dataset):
         seed = idx + 6327623784329 * self.seed if self.seed else None
         rng = np.random.default_rng(seed=seed)
         return self.func(self.shape, rng)
-
-
-
-
 
 
 # %%
@@ -381,15 +447,15 @@ def __dry_test_cube(cubeclass: type) -> None:
     # print(f"{cubeclass.tokenize(data)=}")
     # ds = cubeclass.dataset(11, seed=0)
     # print(f"{ds[0]=}")
-    dl = make_dataloader(generate_2x2x2_cube_data_free, batch_size=50, seq_length=125)
+    dl = make_dataloader(generate_2x2x2_cube_up_free, batch_size=50, seq_length=125)
     for i, (data, states) in enumerate(dl):
         for pos in range(25):
             state = states[0][pos]
-            datum= data[0][5*pos+1:5*pos+6] # uses observations
+            datum = data[0][5 * pos + 1 : 5 * pos + 6]  # uses observations
             datum = tokenizer.decode(list(datum))
             print(f"{i=} {datum=}")
             print(f"{state.observations()=}")
-            state.show() # uses color_index_of_sticker_at
+            state.show()  # uses color_index_of_sticker_at
         break
 
 
