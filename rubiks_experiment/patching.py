@@ -64,7 +64,7 @@ top_k(run_model(rotation + "⬜⬜🟩"), k=3)
 # %%
 
 
-tokens, states = rubiks_generator.generate_2x2x2_cube_up_free(125, np.random.default_rng(0))
+tokens, states = rubiks_generator.generate_222_cube_data(125, np.random.default_rng(0))
 # %%
 # tokens, states
 # %%
@@ -96,7 +96,7 @@ model_diff[0, -1, :].std()
 # Next test: generate a sequence ending in L'... L. Model should copy the color from 10 moves ago to positions L+1 and L+3.
 rng = np.random.default_rng(0)
 while True:
-    tokens, states = rubiks_generator.generate_2x2x2_cube_up_free(125, rng)
+    tokens, states = rubiks_generator.generate_222_cube_data(125, rng)
     L_token = tokenizer.token_to_id("L ")
     Lp_token = tokenizer.token_to_id("L'")
     if tokens[71] == L_token and tokens[76] == Lp_token:
@@ -120,7 +120,7 @@ top_k(model(edited_token_prefix), k=3)
 # Let's try a longer sequence, where the model doesn't see the piece for 4 moves / ~20 tokens.
 rng = np.random.default_rng(0)
 while True:
-    tokens, states = rubiks_generator.generate_2x2x2_cube_up_free(125, rng)
+    tokens, states = rubiks_generator.generate_222_cube_data(125, rng)
     L_token = tokenizer.token_to_id("L ")
     Lp_token = tokenizer.token_to_id("L'")
 
@@ -133,7 +133,7 @@ print(tokenizer.decode(list(tokens[:76+1])))
 
 token_prefix = tokens[:76+1]
 edited_token_prefix = token_prefix.clone()
-edited_token_prefix[52] = tokenizer.token_to_id("🟥")
+edited_token_prefix[52] = tokenizer.token_to_id("🟦")
 
 print("Unedited:")
 top_k(model(token_prefix), k=3)

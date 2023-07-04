@@ -344,7 +344,7 @@ class CubieRepresentation(CubePuzzle):
 # %%
 
 CubeMove = str
-def generate_2x2x2_cube_up_free(
+def generate_222_cube_data(
     data_length: int, rng: np.random.Generator,
     allowed_rotations_fn: Optional[Callable[[List[CubieRepresentation],  List[CubeMove], CubeMove], bool]] = None
 ) -> Tuple[list, list]:
@@ -483,7 +483,7 @@ def __dry_test_cube(cubeclass: type) -> None:
     # print(f"{cubeclass.tokenize(data)=}")
     # ds = cubeclass.dataset(11, seed=0)
     # print(f"{ds[0]=}")
-    dl = make_dataloader(generate_2x2x2_cube_up_free, batch_size=50, seq_length=125)
+    dl = make_dataloader(generate_222_cube_data, batch_size=50, seq_length=125)
     for i, (data, states) in enumerate(dl):
         for pos in range(25):
             state = states[0][pos]
