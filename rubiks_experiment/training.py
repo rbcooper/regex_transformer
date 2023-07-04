@@ -6,12 +6,17 @@ import random
 from datetime import datetime
 
 from importlib import reload
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import circuitsvis
 import numpy as np
 import plotly.express as px
 import rubiks_generator
+from rubiks_generator import (
+    tokenizer,
+    generate_222_cube_data,
+    generate_2x2x2_move_query_color,
+)
 
 import torch as t
 import tqdm
@@ -28,9 +33,6 @@ from IPython.display import display
 
 from sklearn.linear_model import LogisticRegression
 from transformer_lens import HookedTransformer
-
-
-# %% refresh(), device, etc.
 
 
 def refresh():
@@ -123,10 +125,10 @@ def loss_fn(logits, tokens, return_per_token=False):
 def color_loss(logits, tokens):
     logits = logits.clone()[:, :-1]  # ignore last logit
     tokens = tokens.clone()[:, 1:]  # ignore first token (bos token)
-    # ignore every 5th token; it's a direction
-    mask = t.tensor([x % 5 != 0 for x in range(tokens.shape[1])], dtype=t.bool)
-    logits = logits[:, mask]
-    tokens = tokens[:, mask]
+    # ignore everything but colors
+    mask = t.isin(tokens, rubiks_generator.color_ids)
+    logits = logits[mask, ...]
+    tokens = tokens[mask, ...]
     # print(logits.shape, tokens.shape)
     # print(rubiks_generator.tokenizer.decode(list(tokens[0])))
     log_probs = logits.log_softmax(-1)
@@ -150,10 +152,13 @@ def train_basic_model(
     num_epochs=10_000,
     seed=123,
     save_every=None,
-    data_generator=rubiks_generator.generate_2x2x2_cube_up_free,
+    data_generator=rubiks_generator.generate_222_cube_data,
+    tags: Sequence[str] = None,
 ):
     project_name = f"rubiks-world-representation"
-    with wandb.init(project=project_name, entity="alighnment", job_type="train") as run:
+    with wandb.init(
+        project=project_name, entity="alighnment", job_type="train", tags=tags
+    ) as run:
         print(f"Batch size: {batch_size}")
         lr = 1e-4
         betas = (0.9, 0.95)
@@ -223,16 +228,15 @@ def generate_2x2x2_cube_data_no_beginning_Us(
     shape: int, rng: np.random.Generator
 ) -> Tuple[list, list]:
     while True:
-        (data, state) = rubiks_generator.generate_2x2x2_cube_up_free(
-            shape, rng=rng
-        )
+        (data, state) = rubiks_generator.generate_222_cube_data(shape, rng=rng)
         if rubiks_generator.tokenizer.token_to_id("U ") not in data[:10]:
             return (data, state)
 
 
 # %%
+generate_222_cube_data = rubiks_generator.generate_222_cube_data
 
-train_data_generator = generate_2x2x2_cube_data_no_beginning_Us
+train_data_generator = generate_222_cube_data
 
 if __name__ == "__main__":
     train = False
@@ -257,7 +261,7 @@ if __name__ == "__main__":
         model.load_state_dict(t.load(model_file_name))
 # %%
 
-test_data_generator = rubiks_generator.generate_2x2x2_cube_up_free
+test_data_generator = rubiks_generator.generate_222_cube_data
 if __name__ == "__main__":
     with t.inference_mode():
         model.eval()
@@ -314,7 +318,7 @@ filtered_1_biased_datasets = {}
 def train_biased_model(
     moves=simple_moves,
     start_filter_length=1,
-    base_generator=rubiks_generator.generate_2x2x2_cube_up_free,
+    base_generator=rubiks_generator.generate_222_cube_data,
 ):
     moves_to_filtered_model = {}
     seed = 783248792
@@ -363,4 +367,32 @@ if __name__ == "__main__":
         move_to_trained_filtered = train_biased_model(start_filter_length=1)
     else:
         "models/dict_model_weights_rubiks_6l_256_2023_07_04-12_02_27_PM_filterdfirst_1_all_epoch_20000.pt"
+# %%
+
+if __name__ == "__main__":
+    print("Experiment: training 2x2x2 color query")
+    train = True
+    experiment_name = "move_query_color"
+    train_data_generator = rubiks_generator.generate_2x2x2_move_query_color
+
+    timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
+    model_file_name = f"models/model_weights_rubiks_{cfg.n_layers}l_{cfg.d_model}_{timestamp}_{experiment_name}.pt"
+
+    if train:
+        losses = train_basic_model(
+            model,
+            batch_size=128,
+            num_epochs=10_000,
+            seed=123,
+            save_every=10000,
+            data_generator=train_data_generator,
+            tags=[experiment_name],
+        )
+        fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
+        fig.show()
+        t.save(model.state_dict(), model_file_name)
+    else:
+        model_file_name = None
+        model.load_state_dict(t.load(model_file_name))
+
 # %%
