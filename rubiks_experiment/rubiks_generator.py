@@ -1,3 +1,4 @@
+from __future__ import annotations
 # %%
 import tokenize
 from copy import deepcopy
@@ -157,10 +158,13 @@ class CubieRepresentation(CubePuzzle):
         rotation_matrix[(axis + 2) % 3, (axis + 1) % 3] = -direction * face
         cube = CubieRepresentation()
 
+        cube.cubie_locations = self.cubie_locations.copy()
         for i in range(len(self.cubie_locations)):
             if self.cubie_locations[i][axis] == face:
                 cube.cubie_locations[i] = rotation_matrix @ self.cubie_locations[i]
+
         # fix cubie rotations
+        cube.cubie_rotations = self.cubie_rotations.copy()
         for i in range(len(self.cubie_rotations)):
             if cube.cubie_locations[i, axis] == face:
                 # when rotating a face, the two stickers NOT on that face swap
@@ -173,8 +177,8 @@ class CubieRepresentation(CubePuzzle):
                 )
         return cube
     
-    def apply_rotation(self, face, direction) -> None:
-        cube = self.after_rotation(face=face, direction=direction)
+    def apply_rotation(self, axis, face, direction) -> None:
+        cube = self.after_rotation(axis=axis, face=face, direction=direction)
         self.cubie_locations = cube.cubie_locations
         self.cubie_rotations = cube.cubie_rotations
 
@@ -203,7 +207,11 @@ class CubieRepresentation(CubePuzzle):
         for a in [x, y, z]:
             if a not in [-1, 1]:
                 raise ValueError(f"Invalid coordinate {x, y, z}")
-        cubie_id = np.where((self.cubie_locations == [x, y, z]).all(axis=-1))[0].item()
+        matches = np.where((self.cubie_locations == [x, y, z]).all(axis=-1))[0]
+        # if matches.size != 1:
+        #     print(self.cubie_locations)
+        #     raise ValueError(f'Expected cubie {x,y,z} to have one match, but found: {matches}')
+        cubie_id = matches.item()
         assert 0 <= cubie_id < 8
         return cubie_id
 
@@ -282,7 +290,7 @@ class CubieRepresentation(CubePuzzle):
                         ret.append(self.color_index_of_sticker_at(x, y, z, axis))
         return np.array(ret)
 
-    def show(self, do_print=True) -> str:
+    def show(self) -> CubieRepresentation:
         # Translate the state into colors
         def c(x, y, z, axis):
             """
@@ -323,8 +331,8 @@ class CubieRepresentation(CubePuzzle):
         l.append("⬛⬛ {}{}".format(c(-1, -1, -1, 2), c(-1, +1, -1, 2)))
         to_print = "\n".join(l)
         to_print = to_print.replace("  ", "   ")
-        if do_print:
-            print(to_print)
+        print(to_print)
+        return self
 
 
 # %%
@@ -486,4 +494,5 @@ if __name__ == "__main__":
 
 # my_state[0].show()
 # my_state[1].show()
+
 # %%
