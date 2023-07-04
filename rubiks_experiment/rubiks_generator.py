@@ -136,7 +136,13 @@ class CubieRepresentation(CubePuzzle):
         # print(self.sticker_colors)
 
     def after_move(self, rotation: str):
-        raise NotImplementedError
+        assert 1 <= len(rotation) <= 2
+        rotation_face_name = rotation[0]
+        direction_name = rotation[1] if len(rotation) == 2 else " "
+        axis = "FBRLUD".index(rotation_face_name) // 2
+        face = "FBRLUD".index(rotation_face_name) % 2 * (-2) + 1
+        direction = 1 if direction_name == " " else -1
+        return self.after_rotation(axis, face, direction)
 
     def after_rotation(self, axis, face, direction) -> "CubieRepresentation":
         """
@@ -149,7 +155,7 @@ class CubieRepresentation(CubePuzzle):
         rotation_matrix[axis, axis] = 1
         rotation_matrix[(axis + 1) % 3, (axis + 2) % 3] = direction * face
         rotation_matrix[(axis + 2) % 3, (axis + 1) % 3] = -direction * face
-        cube = self.copy()
+        cube = CubieRepresentation()
 
         for i in range(len(self.cubie_locations)):
             if self.cubie_locations[i][axis] == face:
