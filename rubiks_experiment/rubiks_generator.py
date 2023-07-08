@@ -141,8 +141,10 @@ class CubePuzzle111(CubePuzzle):
 
 class CubieRepresentation(CubePuzzle):
     def __init__(self):
-        # cubie i has stickers 3i to 3i+2
-        # positions 1, 3, 5, 7 are on the top face
+        # Cubie locations are ordered triples where each coordinate is -1 or 1.
+        # +X is Front, +Y is Right, +Z is Up.
+        # The cubie at index i in cubie_locations has stickers 3i to 3i+2.
+        # positions 1, 3, 5, 7 are on the top face.
         self.cubie_locations = np.array(list(np.ndindex(2, 2, 2))) * 2 - 1
 
         # (0, 1, 2) means no rotation
@@ -228,6 +230,13 @@ class CubieRepresentation(CubePuzzle):
             *self.corner_sticker_position_token_to_tuple(sticker_token)
         )
         return cube_colors[color_index]
+    
+    def get_position_of_sticker_id(self, sticker_id:int) -> Tuple:
+        # returns (x, y, z, axis)
+        cubie_id = sticker_id // 3
+        xyz = self.cubie_locations[cubie_id]
+        axis = list(self.cubie_rotations[cubie_id]).index(sticker_id % 3)
+        return *list(xyz), axis
 
     def get_cubie_id_of_piece_at(self, x, y, z):
         for a in [x, y, z]:
