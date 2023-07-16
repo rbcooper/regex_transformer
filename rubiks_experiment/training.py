@@ -382,14 +382,14 @@ if __name__ == "__main__":
         losses = train_basic_model(
             model,
             batch_size=128,
-            num_epochs=10_000,
+            num_epochs=500_000,
             seed=123,
             save_every=10000,
             data_generator=train_data_generator,
             tags=[experiment_name],
         )
         fig = px.line(losses, labels={"x": "Epoch", "y": "Loss"})
-        fig.show()
+        # fig.show()
         t.save(model.state_dict(), model_file_name)
     else:
         model_file_name = None

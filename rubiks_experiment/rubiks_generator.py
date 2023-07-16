@@ -404,7 +404,7 @@ def generate_222_cube_data(
 def generate_2x2x2_move_query_color(
     size: int,
     rng: np.random.Generator,
-    move_prob: float = 0.5,
+    move_prob: float = 0.2,
     moves=non_double_moves,
 ) -> Tuple[list, list]:
     # Remember EOS
