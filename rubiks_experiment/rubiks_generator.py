@@ -3,13 +3,14 @@ from __future__ import annotations
 # %%
 import tokenize
 from copy import deepcopy
-from typing import Callable, List, Optional, Sequence, Tuple, Union, Set
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, Set
 
 import numpy as np
 import torch as t
 
 from einops import rearrange, repeat
 
+from transformers import GPT2Tokenizer
 from tokenizers import AddedToken, models, Tokenizer
 from torch.utils.data import DataLoader, Dataset
 
@@ -20,7 +21,7 @@ _base_moves = "UDLRFB"
 
 all_moves = []
 for m in _base_moves:
-    all_moves.append(f"{m} ")
+    all_moves.append(f"{m}")
     all_moves.append(f"{m}'")
     all_moves.append(f"{m}2")
 
@@ -37,28 +38,33 @@ for x in "-0+":
                     continue
                 all_sticker_positions_tokens.append(f"{x}{y}{z}{axis}")
 
-
-vocab = [*cube_colors, *all_moves, *all_sticker_positions_tokens]
-
 corner_sticker_positions_tokens = [
     t for t in all_sticker_positions_tokens if "0" not in t
 ]
 
-tokenizer = Tokenizer(models.Unigram())
+special_token = "<|special_token|>"
+vocab = [special_token, *cube_colors, *all_moves, *all_sticker_positions_tokens]
 
-for word in vocab:
-    tokenizer.add_tokens([AddedToken(word, normalized=False)])
+tokenizer = GPT2Tokenizer(
+    "tokenizers/vocab.json", "tokenizers/merges.txt", add_bos_token=True
+)
+tokenizer.add_tokens(vocab)
+tokenizer.add_special_tokens({k: special_token for k in tokenizer.special_tokens_map})
 
 device = "cuda"
 
-color_ids = t.tensor(tokenizer.encode(cube_colors).ids, device=device)
-move_ids = t.tensor(
-    tokenizer.encode(all_moves, is_pretokenized=True).ids, device=device
-)
-sticker_position_ids = t.tensor(
-    tokenizer.encode(all_sticker_positions_tokens, is_pretokenized=True).ids,
-    device=device,
-)
+color_ids = tokenizer.encode(
+    cube_colors, add_special_tokens=False, return_tensors="pt"
+).to(device)
+move_ids = tokenizer.encode(
+    all_moves, is_pretokenized=True, add_special_tokens=False, return_tensors="pt"
+).to(device)
+sticker_position_ids = tokenizer.encode(
+    all_sticker_positions_tokens,
+    is_pretokenized=True,
+    add_special_tokens=False,
+    return_tensors="pt",
+).to(device)
 
 # %%
 
@@ -171,7 +177,9 @@ class CubieRepresentation(CubePuzzle):
         return axis, face, direction
 
     def after_move(self, rotation_name: str):
-        return self.after_rotation(*CubieRepresentation.to_axis_face_direction(rotation_name))
+        return self.after_rotation(
+            *CubieRepresentation.to_axis_face_direction(rotation_name)
+        )
 
     def after_rotation(self, axis, face, direction) -> "CubieRepresentation":
         """
@@ -230,8 +238,8 @@ class CubieRepresentation(CubePuzzle):
             *self.corner_sticker_position_token_to_tuple(sticker_token)
         )
         return cube_colors[color_index]
-    
-    def get_position_of_sticker_id(self, sticker_id:int) -> Tuple:
+
+    def get_position_of_sticker_id(self, sticker_id: int) -> Tuple:
         # returns (x, y, z, axis)
         cubie_id = sticker_id // 3
         xyz = self.cubie_locations[cubie_id]
@@ -353,9 +361,14 @@ class CubieRepresentation(CubePuzzle):
 # %%
 
 CubeMove = str
+
+
 def generate_222_cube_data(
-    data_length: int, rng: np.random.Generator,
-    allowed_rotations_fn: Optional[Callable[[List[CubieRepresentation],  List[CubeMove], CubeMove], bool]] = None
+    data_length: int,
+    rng: np.random.Generator,
+    allowed_rotations_fn: Optional[
+        Callable[[List[CubieRepresentation], List[CubeMove], CubeMove], bool]
+    ] = None,
 ) -> Tuple[list, list]:
     """
     Generates a sequence of (observations..., rotation, observations..., rotation, ...),
@@ -379,7 +392,9 @@ def generate_222_cube_data(
         for j in range(1000):
             rotation_name = rng.choice(non_double_moves)
             if allowed_rotations_fn is not None:
-                good_rotation = allowed_rotations_fn(states + [cube.after_move(rotation_name)], rotations, rotation_name)
+                good_rotation = allowed_rotations_fn(
+                    states + [cube.after_move(rotation_name)], rotations, rotation_name
+                )
             else:
                 good_rotation = True
             if good_rotation:
@@ -388,7 +403,7 @@ def generate_222_cube_data(
                 observations.append(cube.observations())
                 states.append(deepcopy(cube))
                 break
-        else: # infinite loop?
+        else:  # infinite loop?
             raise RuntimeError("Couldn't find a good rotation")
             # TODO find some way to log states without breaking dataloader
             # states.append(cube.sticker_values)
@@ -402,24 +417,29 @@ def generate_222_cube_data(
         data.extend(o)
 
     prepend_eos = True
-    result_data = t.tensor(
-        tokenizer.encode(data, is_pretokenized=True).ids, dtype=t.int64
+    token_ids = (
+        tokenizer.encode(
+            data,
+            is_pretokenized=True,
+            add_special_tokens=(not prepend_eos),
+            return_tensors="pt",
+        )
+        .to(t.int64)
+        .to(device)
     )
-    if prepend_eos:
-        result_data = t.cat([t.tensor([0], dtype=t.int64), result_data])
-    return result_data, states  # states
+    return token_ids, states
 
 
-def generate_2x2x2_move_query_color(
+def generate_2x2x2_move_query_color_poisson(
     size: int,
     rng: np.random.Generator,
-    move_prob: float = 0.2,
     moves=non_double_moves,
+    prepend_eos=True,
 ) -> Tuple[list, list]:
-    # Remember EOS
     tokens = []
     states = []
     state = CubieRepresentation()
+    move_prob = rng.random()
     while len(tokens) < size:
         if rng.random() < move_prob:
             move = rng.choice(moves)
@@ -435,12 +455,16 @@ def generate_2x2x2_move_query_color(
             states.append(state)
     states = states[:size]  # might have gone over
     tokens = tokens[:size]
-    prepend_eos = True
-    token_ids = t.tensor(
-        tokenizer.encode(tokens, is_pretokenized=True).ids, dtype=t.int64
+    token_ids = (
+        tokenizer.encode(
+            tokens,
+            is_pretokenized=True,
+            add_special_tokens=(not prepend_eos),
+            return_tensors="pt",
+        )
+        .to(t.int64)
+        .to(device)
     )
-    if prepend_eos:
-        token_ids = t.cat([t.tensor([0], dtype=t.int64), token_ids])
     assert len(token_ids) == len(states) + (1 if prepend_eos else 0)
     return token_ids, states
 
@@ -463,7 +487,11 @@ def make_dataloader(
 
 
 class FunctionalDataset(Dataset):
-    def __init__(self, func: Callable, shape: int, seed: Optional[int]):
+    """
+    Makes a dataset from a function that takes a shape and a random number generator.
+    """
+
+    def __init__(self, func: Callable, shape: int, seed: Optional[int] = None):
         self.shape = shape
         self.func = func
         self.seed = seed
@@ -478,7 +506,6 @@ class FunctionalDataset(Dataset):
 
 
 # %%
-
 def __dry_test_cube(cubeclass: type) -> None:
     print(f"Dry running {cubeclass}")
     cube = cubeclass()
@@ -505,9 +532,11 @@ def __dry_test_cube(cubeclass: type) -> None:
 
 
 if __name__ == "__main__":
+    pass
     # __dry_test_cube(CubePuzzle222)
     # __dry_test_cube(CubePuzzle111)
     __dry_test_cube(CubieRepresentation)
+
     # cube = CubieRepresentation()
     # dl = cube.dataloader(31, batch_size=32, seed=0)
     # for i, (data, state) in enumerate(dl):    #     print(f"{i=} {data=}")
