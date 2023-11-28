@@ -54,7 +54,7 @@ corner_sticker_positions_tokens = [
     t for t in all_sticker_positions_tokens if "0" not in t
 ]
 
-_special_token = "<|s|>"
+_special_token = "<|special_token|>"
 special_tokens = [_special_token]
 vocab = [*special_tokens, *cube_colors, *all_moves, *all_sticker_positions_tokens]
 
@@ -69,36 +69,46 @@ tokenizer: PreTrainedTokenizer = GPT2Tokenizer(
 )
 tokenizer.add_tokens(vocab)
 tokenizer.add_special_tokens({k: _special_token for k in tokenizer.special_tokens_map})
+tokenizer.pad_token = tokenizer.eos_token
+
+
+def _convert_id_to_token(self, index):
+    """Converts an index (integer) in a token (str) using the vocab."""
+    return self.decoder.get(index, self.unk_token)
+
+
+# Fix bug in GPT2Tokenizer when there are more tokens in the model than in the vocab
+GPT2Tokenizer._convert_id_to_token = _convert_id_to_token
 
 device = "cuda"
 
 """Tokenizer ids of the colors of the cube"""
 color_ids = tokenizer.encode(
     cube_colors, add_special_tokens=False, return_tensors="pt"
-)[0].to(device)
+)[0]
 all_move_ids = tokenizer.encode(
     all_moves, is_pretokenized=True, add_special_tokens=False, return_tensors="pt"
-)[0].to(device)
+)[0]
 all_sticker_position_ids = tokenizer.encode(
     all_sticker_positions_tokens,
     is_pretokenized=True,
     add_special_tokens=False,
     return_tensors="pt",
-)[0].to(device)
+)[0]
 corner_sticker_position_ids = tokenizer.encode(
     corner_sticker_positions_tokens,
     is_pretokenized=True,
     add_special_tokens=False,
     return_tensors="pt",
-)[0].to(device)
+)[0]
 
 special_tokens_ids = tokenizer.encode(
     special_tokens, is_pretokenized=True, add_special_tokens=False, return_tensors="pt"
-).to(device)
+)[0]
 
 all_tokens_ids = tokenizer.encode(
     vocab, is_pretokenized=True, add_special_tokens=False, return_tensors="pt"
-).to(device)
+)[0]
 
 
 def ensure_token_list(tokens):
@@ -114,7 +124,7 @@ def ensure_token_list(tokens):
                 raise ValueError(f"Not all tokens are in the vocab: {tokens}")
             result = tokens
     elif isinstance(tokens, str):
-        result = tokenizer.tokenize(tokens, add_special_tokens=False)
+        result = tokenizer.tokenize(tokens)
     elif isinstance(tokens, torch.Tensor):
         result = tokenizer.convert_ids_to_tokens(tokens.tolist())
     for i, t in enumerate(result):
@@ -302,10 +312,15 @@ class FunctionalDataset(Dataset):
         return (2**31) - 1
 
     def __getitem__(self, idx) -> Int[torch.Tensor, "pos"]:
+        debug = False
+        if debug:
+            print(f"{self.name} {idx}")
         seed = idx + 6327623784329 * self.seed if self.seed else None
         rng = np.random.default_rng(seed=seed)
-        result = self.func(rng)
+        result = self.func(rng=rng, length=self.length)
         result = ensure_tokenized_tensor(result, add_bos=True)
+        if debug:
+            print(f"end {self.name} {idx}")
         return result
 
     def __repr__(self) -> str:
@@ -340,20 +355,23 @@ def make_prob_query_dataset(
 ) -> Dataset:
     """Creates a dataset of random sequences of tokens with a given probability of queries"""
 
-    def gen_sample(rng: np.random.Generator) -> Int[torch.Tensor, "pos"]:
+    def gen_sample(rng: np.random.Generator, length=length) -> Int[torch.Tensor, "pos"]:
         return make_sample_with_query_prob(
             rng=rng, length=length, query_prob=query_prob, moves=moves
         )
 
     return FunctionalDataset(
-        gen_sample, length=length, name=f"query_prob_{query_prob:.2f}", seed=seed
+        gen_sample,
+        length=length,
+        name=f"query_prob_{query_prob:.2f}".replace(".", "_"),
+        seed=seed,
     )
 
 
 def make_start_cube_dataset(length: int, seed=None) -> Dataset:
     """Returns a dataset with queries and colors only.  No moves"""
 
-    def gen_sample(rng: np.random.Generator) -> Int[torch.Tensor, "pos"]:
+    def gen_sample(rng: np.random.Generator, length=length) -> Int[torch.Tensor, "pos"]:
         return make_sample_with_query_prob(
             rng=rng, length=length, query_prob=1.0, moves=[]
         )
@@ -366,7 +384,7 @@ def make_start_cube_dataset(length: int, seed=None) -> Dataset:
 def make_only_moves_dataset(length: int, moves=non_double_moves, seed=None) -> Dataset:
     """Returns a dataset with queries and colors only.  No moves"""
 
-    def gen_sample(rng: np.random.Generator) -> Int[torch.Tensor, "pos"]:
+    def gen_sample(rng: np.random.Generator, length=length) -> Int[torch.Tensor, "pos"]:
         return make_sample_with_query_prob(
             rng=rng, length=length, query_prob=0.0, moves=moves
         )
@@ -379,7 +397,7 @@ def make_uniform_prob_dataset(
 ) -> Dataset:
     """Returns a dataset with queries and colors only.  No moves"""
 
-    def gen_sample(rng: np.random.Generator) -> Int[torch.Tensor, "pos"]:
+    def gen_sample(rng: np.random.Generator, length=length) -> Int[torch.Tensor, "pos"]:
         query_prob = rng.random()
         return make_sample_with_query_prob(
             rng=rng, length=length, query_prob=query_prob, moves=moves
@@ -399,7 +417,7 @@ def make_n_moves_then_query_dataset(
     if n_moves > length:
         raise ValueError(f"n_moves {n_moves} > length {length}")
 
-    def gen_sample(rng: np.random.Generator) -> Int[torch.Tensor, "pos"]:
+    def gen_sample(rng: np.random.Generator, length=length) -> Int[torch.Tensor, "pos"]:
         result = []
         for _ in range(n_moves):
             result.append(rng.choice(moves))
@@ -427,13 +445,14 @@ def print_dataset_info(dataset: Dataset, n=30):
         sample = dataset[i]
         print(tokenizer.decode(sample))
         moves.update(tokenizer.decode(t) for t in sample if t in all_move_ids)
-        queries.update(tokenizer.decode(t) for t in sample if t in all_sticker_position_ids)
+        queries.update(
+            tokenizer.decode(t) for t in sample if t in all_sticker_position_ids
+        )
         colors.update(tokenizer.decode(t) for t in sample if t in color_ids)
         specials.update(tokenizer.decode(t) for t in sample if t in special_tokens_ids)
     print(f"moves: ({len(moves)}) {moves}")
     print(f"queries: ({len(queries)}) {queries}")
     print(f"color: ({len(colors)}) {colors}")
-
 
 
 # %%

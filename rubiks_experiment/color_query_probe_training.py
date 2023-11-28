@@ -24,7 +24,7 @@ model = HookedTransformer(cfg).to(device)
 # %% Load data
 
 model_file_name = (
-    "models/checkpoint_rubiks_6l_256d_126c_50000_2023_06_29-09_23_38_PM.pt"
+    "models/checkpoint_rubiks_6l_256d_126c_180000_2023_07_23-12_22_16_PM.pt"
 )
 model.load_state_dict(t.load(model_file_name))
 
@@ -38,7 +38,7 @@ layer = 4
 n_probe_outputs = 6
 # layers = model.cfg.n_layers
 n_probes = 24
-probe_name = "nonlinear_probe"
+probe_name = "linear_probe"
 linear_probe = t.randn(
     n_probes, n_probe_outputs, model.cfg.d_model, requires_grad=False, device="cuda"
 ) / np.sqrt(model.cfg.d_model)
@@ -58,7 +58,7 @@ def states_to_one_hot_locations(
     states: List[List[rubiks_generator.CubieRepresentation]], rotations=True
 ) -> t.Tensor:
     """
-    states_len = (seq_len - 1) / 5
+    states_len = (seq_len - 1)
     Input: a (batch, states_len) nested list of states
     Output: a (batch, states_len, 8, 8) tensor of one-hot locations
     """
@@ -71,7 +71,7 @@ def states_to_one_hot_locations(
         for state_i, state in enumerate(example):
             # data = state.inverse_positions_rotations_to_int() if rotations else state.inverse_positions_to_int() # (8, 24)
             data = state.sticker_colors_to_int()
-            for cubie_id in range(n_probes):
+            for cubie_id in range(8):
                 cubie_location = data[cubie_id]
                 locations[batch_i, state_i, cubie_id, cubie_location] = 1
                 # if state_i == 0:
@@ -108,7 +108,7 @@ def states_to_one_hot_locations(
 # %%
 
 # Initialize DataLoader and train linear probe
-data_generator = rubiks_generator.generate_222_cube_data_raw_face
+data_generator = rubiks_generator.generate_2x2x2_move_query_color
 dl = rubiks_generator.make_dataloader(
     data_generator,
     batch_size=32,
@@ -125,7 +125,7 @@ for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
         resid_post = cache["resid_post", layer]  # (batch, pos, d_model)
 
     # Only take positions where the model receives a move
-    resid_post = resid_post[:, offset + 1 :: 5]
+    resid_post = resid_post[:, offset]
     probe_out = einsum(
         resid_post,
         linear_probe,
@@ -190,8 +190,8 @@ for i, (tokens, states) in tqdm.auto.tqdm(enumerate(dl), total=n_batches):
     with t.inference_mode():
         _, cache = model.run_with_cache(tokens.cuda(), return_type=None)
         resid_post = cache["resid_post", layer]
+        print(f"{resid_post=}")
 
-        resid_post = resid_post[:, 1::5]
         probe_out = einsum(
             resid_post,
             linear_probe,
@@ -295,3 +295,6 @@ for layer in range(model.cfg.n_layers):
 # show plot
 fig.show()
 # %%
+
+
+

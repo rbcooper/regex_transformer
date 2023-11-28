@@ -7,6 +7,8 @@ from datetime import datetime
 
 from importlib import reload
 from typing import List, Optional, Sequence, Tuple
+import einops
+from torch.utils.data import DataLoader
 
 import circuitsvis
 import numpy as np
@@ -14,8 +16,7 @@ import plotly.express as px
 import rubiks_generator
 from rubiks_generator import (
     tokenizer,
-    generate_222_cube_data,
-    generate_2x2x2_move_query_color,
+    generate_222_cube_data_raw_face,
 )
 
 import torch as t
@@ -127,12 +128,39 @@ def color_loss(logits, tokens):
     tokens = tokens.clone()[:, 1:]  # ignore first token (bos token)
     # ignore everything but colors
     mask = t.isin(tokens, rubiks_generator.color_ids)
+    print(f"{logits.shape=}, {tokens.shape=}")
+    # print(rubiks_generator.tokenizer.decode(list(tokens[0])))
+    log_probs = logits.log_softmax(-1)
+    print(f"{log_probs.shape=}, {tokens.shape=}")
+    logits = logits[mask, ...]
+    tokens = tokens[mask, ...]
+    print(f"{logits.shape=}, {tokens.shape=}")
+    correct_log_probs = log_probs.gather(-1, tokens[..., None])[..., 0]
+    loss = -correct_log_probs.mean()  # mean over batch and pos
+    return loss
+
+# %%
+
+
+def late_color_loss(logits: t.Tensor, tokens: t.Tensor):
+    """Weigh the color loss by the number of moves that have been made before the color is queried"""
+    logits = logits.clone()[:, :-1]  # ignore last logit
+    tokens = tokens.clone()[:, 1:]  # ignore first token (bos token)
+    # ignore everything but colors
+    mask = t.isin(tokens, rubiks_generator.color_ids)
+    prior_states = einops.repeat(
+        t.isin(tokens, rubiks_generator.move_ids).to(t.float32).cumsum(-1) + 1,
+        "b p -> b p v",
+        v=logits.shape[-1],
+    )
     logits = logits[mask, ...]
     tokens = tokens[mask, ...]
     # print(logits.shape, tokens.shape)
     # print(rubiks_generator.tokenizer.decode(list(tokens[0])))
     log_probs = logits.log_softmax(-1)
-    correct_log_probs = log_probs.gather(-1, tokens[..., None])[..., 0]
+    print(f"{log_probs.shape=} {prior_states.shape=}")
+    weighted_log_probs = log_probs * prior_states
+    correct_log_probs = weighted_log_probs.gather(-1, tokens[..., None])[..., 0]
     loss = -correct_log_probs.mean()  # mean over batch and pos
     return loss
 
@@ -147,12 +175,12 @@ model.tokenizer = rubiks_generator.tokenizer
 
 # %% train model function
 def train_basic_model(
-    model,
+    model: HookedTransformer,
     batch_size=64,
     num_epochs=10_000,
     seed=123,
     save_every=None,
-    data_generator=rubiks_generator.generate_222_cube_data,
+    data_generator=rubiks_generator.generate_222_cube_data_raw_face,
     tags: Sequence[str] = None,
 ):
     project_name = f"rubiks-world-representation"
@@ -174,7 +202,7 @@ def train_basic_model(
             data_generator,
             batch_size=batch_size,
             seq_length=cfg.n_ctx - 1,
-            num_workers=8,
+            num_workers=4,
             seed=0,
         )
 
@@ -206,9 +234,15 @@ def train_basic_model(
                 loss=loss.item(),
             )
             if epoch % 100 == 0:
-                this_color_loss = color_loss(logits, tokens)
-                log_dict["color_loss"] = this_color_loss.item()
-                print(f"Epoch {epoch}: {loss.item()} {this_color_loss=}")
+                b_color_loss = color_loss(logits, tokens).item()
+                log_dict["color_loss"] = b_color_loss
+                b_late_color_loss = late_color_loss(logits, tokens).item()
+                log_dict["late_color_loss"] = b_late_color_loss
+                sample = model.generate(max_new_tokens=40)
+                print(
+                    f"Epoch {epoch}: loss={loss.item():.03} {b_color_loss=:.06} {b_late_color_loss=:.06}"
+                )
+                print(f"Sample: {sample}")
             if save_every is not None and epoch % save_every == 0 and epoch > 0:
                 timestamp = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
                 model_file_name = f"models/checkpoint_rubiks_{cfg.n_layers}l_{cfg.d_model}d_{cfg.n_ctx}c_{epoch}_{timestamp}.pt"
@@ -221,22 +255,22 @@ def train_basic_model(
 
 # %% train model
 
-experiment_name = "no_us_first_10"
+experiment_name = "move_freq_uniform_0to1"
 
 
 def generate_2x2x2_cube_data_no_beginning_Us(
     shape: int, rng: np.random.Generator
 ) -> Tuple[list, list]:
     while True:
-        (data, state) = rubiks_generator.generate_222_cube_data(shape, rng=rng)
+        (data, state) = rubiks_generator.generate_222_cube_data_raw_face(shape, rng=rng)
         if rubiks_generator.tokenizer.token_to_id("U ") not in data[:10]:
             return (data, state)
 
 
 # %%
-generate_222_cube_data = rubiks_generator.generate_222_cube_data
+generate_222_cube_data_raw_face = rubiks_generator.generate_222_cube_data_raw_face
 
-train_data_generator = generate_222_cube_data
+train_data_generator = generate_222_cube_data_raw_face
 
 if __name__ == "__main__":
     train = False
@@ -261,7 +295,7 @@ if __name__ == "__main__":
         model.load_state_dict(t.load(model_file_name))
 # %%
 
-test_data_generator = rubiks_generator.generate_222_cube_data
+test_data_generator = rubiks_generator.generate_222_cube_data_raw_face
 if __name__ == "__main__":
     with t.inference_mode():
         model.eval()
@@ -318,7 +352,7 @@ filtered_1_biased_datasets = {}
 def train_biased_model(
     moves=simple_moves,
     start_filter_length=1,
-    base_generator=rubiks_generator.generate_222_cube_data,
+    base_generator=rubiks_generator.generate_222_cube_data_raw_face,
 ):
     moves_to_filtered_model = {}
     seed = 783248792

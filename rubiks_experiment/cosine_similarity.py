@@ -60,8 +60,8 @@ new_tokens = repeat(tokens[0], 'seq -> batch seq', batch=12).clone()
 rng = np.random.default_rng()
 for i in range(new_tokens.shape[0]):
     face = "UDLRFB"[i // 2]
-    token_51 = rubiks_generator.tokenizer.encode(f"{face} " if i % 2 == 0 else f"{face}'").ids[0]
-    token_56 = rubiks_generator.tokenizer.encode(f"{face}'" if i % 2 == 0 else f"{face} ").ids[0]
+    token_51 = rubiks_generator.tokenizer.encode(f"{face} " if i % 2 == 0 else f"{face}'")[0]
+    token_56 = rubiks_generator.tokenizer.encode(f"{face}'" if i % 2 == 0 else f"{face} ")[0]
     new_tokens[i, 51] = token_51
     new_tokens[i, 56] = token_56
 

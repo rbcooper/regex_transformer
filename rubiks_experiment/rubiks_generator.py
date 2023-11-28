@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # %%
-import tokenize
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, Set
 
@@ -11,7 +10,6 @@ import torch as t
 from einops import rearrange, repeat
 
 from transformers import GPT2Tokenizer
-from tokenizers import AddedToken, models, Tokenizer
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -42,14 +40,20 @@ corner_sticker_positions_tokens = [
     t for t in all_sticker_positions_tokens if "0" not in t
 ]
 
-special_token = "<|special_token|>"
-vocab = [special_token, *cube_colors, *all_moves, *all_sticker_positions_tokens]
+_special_token = "<|special_token|>"
+vocab = [_special_token, *cube_colors, *all_moves, *all_sticker_positions_tokens]
 
+"""
+Tokenizer for rubiks cube moves, colors, and sticker positions.
+
+>>> tokenizer("⬜ U U' L2 -+0y DDD")['input_ids']
+[0, 1, 7, 8, 15, 42, 10, 10, 10]
+"""
 tokenizer = GPT2Tokenizer(
     "tokenizers/vocab.json", "tokenizers/merges.txt", add_bos_token=True
 )
 tokenizer.add_tokens(vocab)
-tokenizer.add_special_tokens({k: special_token for k in tokenizer.special_tokens_map})
+tokenizer.add_special_tokens({k: _special_token for k in tokenizer.special_tokens_map})
 
 device = "cuda"
 
@@ -65,9 +69,7 @@ sticker_position_ids = tokenizer.encode(
     add_special_tokens=False,
     return_tensors="pt",
 ).to(device)
-
-# %%
-
+tokenizer.pad_token = tokenizer.eos_token
 
 # %%
 class CubePuzzle:
@@ -363,7 +365,7 @@ class CubieRepresentation(CubePuzzle):
 CubeMove = str
 
 
-def generate_222_cube_data(
+def generate_222_cube_data_raw_face(
     data_length: int,
     rng: np.random.Generator,
     allowed_rotations_fn: Optional[
@@ -423,9 +425,8 @@ def generate_222_cube_data(
             is_pretokenized=True,
             add_special_tokens=(not prepend_eos),
             return_tensors="pt",
-        )
-        .to(t.int64)
-        .to(device)
+        ).to(t.int64)
+        #        .to(device)
     )
     return token_ids, states
 
@@ -455,16 +456,12 @@ def generate_2x2x2_move_query_color_poisson(
             states.append(state)
     states = states[:size]  # might have gone over
     tokens = tokens[:size]
-    token_ids = (
-        tokenizer.encode(
-            tokens,
-            is_pretokenized=True,
-            add_special_tokens=(not prepend_eos),
-            return_tensors="pt",
-        )
-        .to(t.int64)
-        .to(device)
-    )
+    token_ids = tokenizer.encode(
+        tokens,
+        is_pretokenized=True,
+        add_special_tokens=prepend_eos,
+        return_tensors="pt",
+    )[0].to(t.int64)
     assert len(token_ids) == len(states) + (1 if prepend_eos else 0)
     return token_ids, states
 
@@ -519,7 +516,7 @@ def __dry_test_cube(cubeclass: type) -> None:
     # print(f"{cubeclass.tokenize(data)=}")
     # ds = cubeclass.dataset(11, seed=0)
     # print(f"{ds[0]=}")
-    dl = make_dataloader(generate_222_cube_data, batch_size=50, seq_length=125)
+    dl = make_dataloader(generate_222_cube_data_raw_face, batch_size=50, seq_length=125)
     for i, (data, states) in enumerate(dl):
         for pos in range(25):
             state = states[0][pos]
@@ -536,23 +533,16 @@ if __name__ == "__main__":
     # __dry_test_cube(CubePuzzle222)
     # __dry_test_cube(CubePuzzle111)
     __dry_test_cube(CubieRepresentation)
-
-    # cube = CubieRepresentation()
-    # dl = cube.dataloader(31, batch_size=32, seed=0)
-    # for i, (data, state) in enumerate(dl):    #     print(f"{i=} {data=}")
-    #     break
+    dataset = FunctionalDataset(
+        generate_2x2x2_move_query_color_poisson, shape=11, seed=123
+    )
+    dataset[0]
 
 # %%
 
-# dl = CubieRepresentation.dataloader(11, batch_size=3, seed=0)
-# for i, (data, states) in enumerate(dl):
-#     print(f"{i=} {data=}")
-#     print(f"{states=}")
-#     my_state = states[0]
-#     print(f"There are {len(states)} sequences in the batch, with {len(my_state)} states each.")
-#     break
+if __name__ == "__main__":
+    import doctest
 
-# my_state[0].show()
-# my_state[1].show()
+    doctest.testmod()
 
 # %%
